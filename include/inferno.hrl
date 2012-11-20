@@ -6,6 +6,7 @@
 }).
 
 -record(info_function, {
+        mfa,
         name, 
         arity, 
         module_name, 
