@@ -1,4 +1,6 @@
-%%% @doc This module is a `gen_server' that handles a single port connection.
+%%% @doc This module is a `gen_server' that stores information about a 
+%%%      single application.
+%%% @end
 -module(inferno_server).
 -behaviour(gen_server).
 
@@ -7,7 +9,8 @@
 %% ------------------------------------------------------------------
 
 -export([start_link/2,
-         mfa_to_description/2]).
+         mfa_to_description/2,
+         module_name_to_description/2]).
 
 
 
@@ -56,12 +59,17 @@
         mfa
 }).
 
+-record(module_name_to_description, {
+        module_name
+}).
+
 
 %% ------------------------------------------------------------------
 %% Import code
 %% ------------------------------------------------------------------
 
 -include_lib("inferno/include/inferno.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 
 %% ------------------------------------------------------------------
@@ -69,6 +77,7 @@
 %% ------------------------------------------------------------------
 
 -compile({parse_transform, seqbind}).
+-compile({parse_transform, do}).
 
 
 %% ------------------------------------------------------------------
@@ -106,6 +115,9 @@ start_link(Path, Params) ->
 mfa_to_description(Server, MFA) ->
     call(Server, #mfa_to_description{mfa = MFA}).
 
+module_name_to_description(Server, ModuleName) ->
+    call(Server, #module_name_to_description{module_name = ModuleName}).
+
  
 %% ------------------------------------------------------------------
 %% gen_server Client Helpers
@@ -133,7 +145,7 @@ init([AppDir, _Params]) ->
     FunTable = ets:new(inferno_function_table, [{keypos, #info_function.mfa}]),
     ModTable = ets:new(inferno_module_table, [{keypos, #info_module.name}]),
     State = #state{
-            module2filename = dict:from_list(include_lib:source_files(AppDir)),
+            module2filename = dict:from_list(inferno_lib:source_files(AppDir)),
             function_tbl = FunTable,
             module_tbl = ModTable
     },
@@ -142,12 +154,30 @@ init([AppDir, _Params]) ->
  
 %% @private
 handle_call(#mfa_to_description{mfa = MFA}, _From, State) ->
-    {Module, Function, Arity} = MFA,
-    check_module(Module, State),
-    Reply = ok,
+    Reply = 
+    do([error_m || 
+        _ModuleStatus <- check_module(mfa_to_module_name(MFA), State),
+        Description <- lookup_element(State#state.function_tbl, 
+                                      MFA, 
+                                      #info_function.description),
+        return(Description)
+       ]),
+    {reply, Reply, State};
+
+handle_call(#module_name_to_description{module_name = ModuleName}, 
+            _From, State) ->
+    Reply = 
+    do([error_m || 
+        _ModuleStatus <- check_module(ModuleName, State),
+        Description <- lookup_element(State#state.module_tbl, 
+                                      ModuleName, 
+                                      #info_module.description),
+        return(Description)
+       ]),
     {reply, Reply, State}.
 
 
+%% @private
 handle_cast(_Mess, State) ->
     {noreply, State}.
 
@@ -173,16 +203,87 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
 
-check_module(Module, State) ->
-    ok.
+
+%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%% Data loading
+%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+check_module(ModuleName, State) ->
+    #state{module2filename = M2F,
+           module_tbl = ModTable, 
+           function_tbl = FunTable} = State,
+    case ets:member(ModTable, ModuleName) of
+        false ->
+            analyse_module(ModuleName, M2F, ModTable, FunTable);
+        true ->
+            {ok, already_loaded}
+    end.
 
 
-analyse_module(ModuleName, M2F) ->
-    XML = inferno_lib:filename_to_edoc_xml(
-            module_name_to_filename(ModuleName, M2F)),
-    IM = #info_module{functions = Funs} = include_lib:handle_module(XML),
-    ok.
+-spec analyse_module(ModuleName, M2F, ModTable, FunTable) -> 
+    {ok, Status} | {error, Error} when
+    ModuleName :: atom(),
+    M2F :: dict(),
+    ModTable :: ets:tid(),
+    FunTable :: ets:tid(),
+    Status :: loaded,
+    Error :: atom().
+
+analyse_module(ModuleName, M2F, ModTable, FunTable) ->
+    do([error_m ||
+        FileName <- module_name_to_filename(ModuleName, M2F),
+        XML <- inferno_lib:filename_to_edoc_xml(FileName),
+        IM = #info_module{functions = Funs} = inferno_lib:handle_module(XML),
+        IM2 = IM#info_module{functions = undefined},
+        true = ets:insert(ModTable, IM2),
+        true = ets:insert(FunTable, Funs),
+        return(loaded)
+       ]).
 
 
 module_name_to_filename(ModuleName, M2F) ->
-    dict:fetch(ModuleName, M2F).
+    case dict:find(ModuleName, M2F) of
+        {ok, _FileName} = X -> X;
+        error -> {error, module_not_found}
+    end.
+
+
+
+
+%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%% Data extraction
+%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+lookup_element(Tab, Key, Pos) ->
+    try
+        {ok, ets:lookup_element(Tab, Key, Pos)}
+    catch error:badarg ->
+        {error, elem_not_found}
+    end.
+
+
+%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%% Helpers
+%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+mfa_to_module_name({M, _F, _A}) -> M.
+
+
+%% ------------------------------------------------------------------
+%% Tests
+%% ------------------------------------------------------------------
+
+mfa_to_description_test() ->
+    AppDir = code:lib_dir(inferno),
+    {ok, S} = ?SRV:start_link(AppDir, []),
+    Desc = ?SRV:mfa_to_description(S, {?SRV, start_link, 2}),
+    io:format(user, "mfa_to_description: ~ts", [Desc]),
+    ok.
+
+
+module_name_to_description_test() ->
+    AppDir = code:lib_dir(inferno),
+    {ok, S} = ?SRV:start_link(AppDir, []),
+    Desc = ?SRV:module_name_to_description(S, ?SRV),
+    io:format(user, "module_name_to_description: ~ts", [Desc]),
+    ok.

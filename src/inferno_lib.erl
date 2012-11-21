@@ -1,7 +1,6 @@
 %% @doc This module parses edoc info into records.
 -module(inferno_lib).
--export([handle_application/2, 
-         source_files/2,
+-export([source_files/1,
          handle_module/1,
          filename_to_edoc_xml/1]).
 
@@ -11,16 +10,15 @@
 -compile({parse_transform, seqbind}).
 
 
-
-handle_application(AppDir, IsValidModule) ->
-    [{ModuleName, handle_module(filename_to_edoc_xml(FileName))}
-     || {ModuleName, FileName} <- source_files(AppDir), IsValidModule(ModuleName)].
-
-
 filename_to_edoc_xml(FileName) ->
-    {_, XML}  = edoc:get_doc(FileName,
-                             [{private, true}, {hidden, true}]),
-    XML.
+    try
+        {_, XML} = edoc:get_doc(FileName,
+                                [{private, true}, {hidden, true}]),
+        
+        {ok, XML}
+    catch Type:Error ->
+        {error, {Type, Error, erlang:get_stacktrace()}}
+    end.
 
 
 
@@ -54,7 +52,8 @@ handle_module(#xmlElement{name = module, attributes = Attrs, content = Con}) ->
     set_function_module_names(X@).
 
 set_function_module_names(M=#info_module{name = ModuleName, functions = Funs}) ->
-    NewFuns = [F#info_function{module_name = ModuleName} || F <- Funs],
+    NewFuns = [set_function_mfa(F#info_function{module_name = ModuleName})
+               || F <- Funs],
     M#info_module{functions = NewFuns}.
 
 
@@ -90,7 +89,6 @@ handle_module_attribute(_, X) ->
 handle_function(#xmlElement{name = function, attributes = Attrs, content = Con}) ->
     X@ = #info_function{},
     X@ = lists:foldl(fun handle_function_element/2, X@, Con),
-    X@ = set_function_mfa(X@),
     lists:foldl(fun handle_function_attribute/2, X@, Attrs).
 
 
@@ -143,14 +141,8 @@ attr_to_boolean(_) -> false.
 
 this_module_test() ->
     FileName = code:lib_dir(inferno) ++ "/src/inferno_lib.erl",
-    XML = filename_to_edoc_xml(FileName),
+    {ok, XML} = filename_to_edoc_xml(FileName),
     ModRec = handle_module(XML),
     io:format(user, "ModRec: ~p", [ModRec]),
     ok.
 
-
-
-this_application_test() ->
-    AppDir = code:lib_dir(inferno),
-    handle_application(AppDir, fun(ModuleName) -> ModuleName =:= inferno_lib end),
-    ok.
