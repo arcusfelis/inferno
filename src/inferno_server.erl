@@ -9,9 +9,8 @@
 %% ------------------------------------------------------------------
 
 -export([start_link/2,
-         mfa_to_description/2,
-         module_name_to_description/2]).
-
+         module_info/3,
+         function_info/3]).
 
 
 %% ------------------------------------------------------------------
@@ -51,18 +50,21 @@
 -record(state, {
         module2filename :: dict(),
         function_tbl :: ets:tid(),
-        module_tbl :: ets:tid()
+        module_tbl :: ets:tid(),
+        mod_rec_f2p :: dict(),
+        fun_rec_f2p :: dict()
 }).
 
 
--record(mfa_to_description, {
-        mfa
+-record(function_info, {
+        mfa,
+        fields
 }).
 
--record(module_name_to_description, {
-        module_name
+-record(module_info, {
+        module_name,
+        fields
 }).
-
 
 %% ------------------------------------------------------------------
 %% Import code
@@ -112,11 +114,11 @@ start_link(Path, Params) ->
     end.
 
 
-mfa_to_description(Server, MFA) ->
-    call(Server, #mfa_to_description{mfa = MFA}).
+function_info(Server, MFA, Fields) ->
+    call(Server, #function_info{mfa = MFA, fields = Fields}).
 
-module_name_to_description(Server, ModuleName) ->
-    call(Server, #module_name_to_description{module_name = ModuleName}).
+module_info(Server, ModuleName, Fields) ->
+    call(Server, #module_info{module_name = ModuleName, fields = Fields}).
 
  
 %% ------------------------------------------------------------------
@@ -144,37 +146,45 @@ client_error_handler({error, Reason}) ->
 init([AppDir, _Params]) ->
     FunTable = ets:new(inferno_function_table, [{keypos, #info_function.mfa}]),
     ModTable = ets:new(inferno_module_table, [{keypos, #info_module.name}]),
+    %% Collect info about positions of the record.
+    ModRecF2P = fields_to_position_dict(record_info(fields, info_module)),
+    FunRecF2P = fields_to_position_dict(record_info(fields, info_function)),
     State = #state{
             module2filename = dict:from_list(inferno_lib:source_files(AppDir)),
             function_tbl = FunTable,
-            module_tbl = ModTable
+            module_tbl = ModTable,
+            mod_rec_f2p = ModRecF2P,
+            fun_rec_f2p = FunRecF2P
     },
     {ok, State}.
 
  
 %% @private
-handle_call(#mfa_to_description{mfa = MFA}, _From, State) ->
+handle_call(#function_info{mfa = MFA, fields = FieldNames}, _From, State) ->
     Reply = 
     do([error_m || 
         _ModuleStatus <- check_module(mfa_to_module_name(MFA), State),
-        Description <- lookup_element(State#state.function_tbl, 
-                                      MFA, 
-                                      #info_function.description),
-        return(Description)
+        Info <- lookup_fields(State#state.function_tbl, %% table
+                              MFA,                      %% key
+                              FieldNames,               %% atoms
+                              State#state.fun_rec_f2p), %% meta info
+        return(Info)
        ]),
     {reply, Reply, State};
 
-handle_call(#module_name_to_description{module_name = ModuleName}, 
+handle_call(#module_info{module_name = ModuleName, fields = FieldNames},
             _From, State) ->
     Reply = 
     do([error_m || 
         _ModuleStatus <- check_module(ModuleName, State),
-        Description <- lookup_element(State#state.module_tbl, 
-                                      ModuleName, 
-                                      #info_module.description),
-        return(Description)
+        Info <- lookup_fields(State#state.module_tbl,   %% table
+                              ModuleName,               %% key
+                              FieldNames,               %% atoms
+                              State#state.mod_rec_f2p), %% meta info
+        return(Info)
        ]),
     {reply, Reply, State}.
+
 
 
 %% @private
@@ -214,7 +224,12 @@ check_module(ModuleName, State) ->
            function_tbl = FunTable} = State,
     case ets:member(ModTable, ModuleName) of
         false ->
-            analyse_module(ModuleName, M2F, ModTable, FunTable);
+            Result = analyse_module(ModuleName, M2F, ModTable, FunTable),
+            %% Put the empty module, if an error.
+            %% It helps to escape of file reading again.
+            [ets:insert(ModTable, #info_module{name = ModuleName})
+             || error =:= element(1, Result)],
+            Result;
         true ->
             {ok, already_loaded}
     end.
@@ -233,9 +248,12 @@ analyse_module(ModuleName, M2F, ModTable, FunTable) ->
     do([error_m ||
         FileName <- module_name_to_filename(ModuleName, M2F),
         XML <- inferno_lib:filename_to_edoc_xml(FileName),
-        IM = #info_module{functions = Funs} = inferno_lib:handle_module(XML),
-        IM2 = IM#info_module{functions = undefined},
-        true = ets:insert(ModTable, IM2),
+        MFA2PosDict <- inferno_lib:filename_to_function_positions(FileName),
+        IM = inferno_lib:handle_module(XML),
+        IM2 = #info_module{functions = Funs} = 
+            inferno_lib:set_positions(IM, MFA2PosDict),
+        IM3 = IM2#info_module{functions = undefined},
+        true = ets:insert(ModTable, IM3),
         true = ets:insert(FunTable, Funs),
         return(loaded)
        ]).
@@ -249,19 +267,6 @@ module_name_to_filename(ModuleName, M2F) ->
 
 
 
-
-%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-%% Data extraction
-%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-lookup_element(Tab, Key, Pos) ->
-    try
-        {ok, ets:lookup_element(Tab, Key, Pos)}
-    catch error:badarg ->
-        {error, elem_not_found}
-    end.
-
-
 %% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 %% Helpers
 %% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -269,21 +274,54 @@ lookup_element(Tab, Key, Pos) ->
 mfa_to_module_name({M, _F, _A}) -> M.
 
 
+lookup_fields(Table, Key, FieldNames, N2P) ->
+    case ets:lookup(Table, Key) of
+        [] -> {error, {no_such_key, Key}};
+        [Elem] -> 
+            %% For each field, extract its value from `Elem'.
+            try
+                [element(dict:fetch(FieldName, N2P), Elem)
+                 || FieldName <- FieldNames]
+
+            of Values -> {ok, Values}
+            catch error:Reason ->
+                {error, {no_such_field, Reason}}
+            end
+    end.
+
+
+fields_to_position_dict(Fields) ->
+    dict:from_list(fields_to_position_pl(Fields)).
+
+
+fields_to_position_pl(Fields) ->
+    fields_to_position_pl(Fields, 2).
+
+fields_to_position_pl([H|T], N) ->
+    [{H, N} | fields_to_position_pl(T, N+1)];
+fields_to_position_pl([], _N) ->
+    [].
+
 %% ------------------------------------------------------------------
 %% Tests
 %% ------------------------------------------------------------------
 
-mfa_to_description_test() ->
+function_info_test() ->
     AppDir = code:lib_dir(inferno),
     {ok, S} = ?SRV:start_link(AppDir, []),
-    Desc = ?SRV:mfa_to_description(S, {?SRV, start_link, 2}),
-    io:format(user, "mfa_to_description: ~ts", [Desc]),
+    Info = ?SRV:function_info(S, {?SRV, start_link, 2},
+                              [description, title, position]),
+    ?assertMatch([_, _, _], Info),
+    io:format(user, "function_info: ~p", [Info]),
     ok.
 
 
-module_name_to_description_test() ->
+module_info_test() ->
     AppDir = code:lib_dir(inferno),
     {ok, S} = ?SRV:start_link(AppDir, []),
-    Desc = ?SRV:module_name_to_description(S, ?SRV),
-    io:format(user, "module_name_to_description: ~ts", [Desc]),
+    Info = ?SRV:module_info(S, ?SRV, [description, title]),
+    ?assertMatch([_, _], Info),
+    io:format(user, "module_info: ~p", [Info]),
     ok.
+
+

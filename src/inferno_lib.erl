@@ -2,7 +2,9 @@
 -module(inferno_lib).
 -export([source_files/1,
          handle_module/1,
-         filename_to_edoc_xml/1]).
+         filename_to_edoc_xml/1,
+         set_positions/2,
+         filename_to_function_positions/1]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -14,11 +16,11 @@ filename_to_edoc_xml(FileName) ->
     try
         {_, XML} = edoc:get_doc(FileName,
                                 [{private, true}, {hidden, true}]),
-        
         {ok, XML}
     catch Type:Error ->
         {error, {Type, Error, erlang:get_stacktrace()}}
     end.
+
 
 
 
@@ -27,13 +29,13 @@ filename_to_edoc_xml(FileName) ->
         AppDir :: filename:dirname(),
         ModuleName :: atom(),
         FileName :: file:filename().
-        
+
 source_files(AppDir) ->
     Fun = fun(FileName, Acc) ->
         ModuleName = list_to_atom(filename:basename(FileName, ".erl")),
         [{ModuleName, FileName} | Acc]
         end,
- 
+
     RegExp = ".erl$",
     AccIn  = [],
     %% Handle files recursivelly in the directory.
@@ -145,4 +147,60 @@ this_module_test() ->
     ModRec = handle_module(XML),
     io:format(user, "ModRec: ~p", [ModRec]),
     ok.
+
+this_module_positions_test() ->
+    FileName = code:lib_dir(inferno) ++ "/src/inferno_lib.erl",
+    {ok, MFA2PosDict} = filename_to_function_positions(FileName),
+    io:format(user, "MFA2PosDict: ~p", [dict:to_list(MFA2PosDict)]),
+    ok.
+
+
+
+
+%% ------------------------------------------------------------------
+%% These functions allows to extract function positions from AST
+%% ------------------------------------------------------------------
+
+set_positions(M=#info_module{functions = Funs}, Fun2Pos) ->
+    NewFuns = [set_function_position(F, Fun2Pos) || F <- Funs],
+    M#info_module{functions = NewFuns}.
+    
+set_function_position(F=#info_function{mfa = MFA}, Fun2Pos) ->
+    F#info_function{position = dict:fetch(MFA, Fun2Pos)}.
+
+
+filename_to_function_positions(FileName) ->
+    case epp_dodger:parse_file(FileName, []) of
+        {ok, Forms} ->
+            ModForm = lists2:filter_head(is_attribute_form(module), Forms),
+            ModName = erl_syntax:atom_value(hd(
+                erl_syntax:attribute_arguments(ModForm))),
+            Dict = dict:from_list(function_positions(Forms, ModName)),
+            {ok, Dict};
+        {error, _} = Error ->
+            Error
+    end.
+    
+
+
+function_positions(Forms, ModName) ->
+    [{to_mfa(ModName, F), erl_syntax:get_pos(F)}
+     || F <- Forms, erl_syntax:type(F) =:= function].
+
+
+to_mfa(ModName, F) ->
+    FunName = erl_syntax:atom_value(erl_syntax:function_name(F)),
+    {ModName, FunName, erl_syntax:function_arity(F)}.
+
+
+is_attribute_form(Name) ->
+    fun(Form) -> is_attribute_form(Form, Name) end.
+
+is_attribute_form(Form, Name) ->
+    try
+        erl_syntax:atom_value(erl_syntax:attribute_name(Form)) =:= Name
+    catch error:_ ->
+        false
+    end.
+
 

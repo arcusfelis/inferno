@@ -12,5 +12,6 @@
         module_name, 
         title, 
         description, 
-        is_exported = false :: boolean()
+        is_exported = false :: boolean(),
+        position
 }).
