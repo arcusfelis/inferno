@@ -9,6 +9,7 @@
 %% ------------------------------------------------------------------
 
 -export([start_link/2,
+         start/2,
          module_info/3,
          function_info/3]).
 
@@ -112,6 +113,14 @@ start_link(Path, Params) ->
         Name ->
             gen_server:start_link(Name, ?MODULE, Args, [])
     end.
+
+
+%% @doc This function is for testing only.
+-spec start(filename:directory(), [term()]) -> {ok, x_server()}.
+
+start(Path, Params) ->
+    Args = [Path, Params],
+    gen_server:start_link(?MODULE, Args, []).
 
 
 function_info(Server, MFA, Fields) ->

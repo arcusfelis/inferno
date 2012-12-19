@@ -166,7 +166,14 @@ set_positions(M=#info_module{functions = Funs}, Fun2Pos) ->
     M#info_module{functions = NewFuns}.
     
 set_function_position(F=#info_function{mfa = MFA}, Fun2Pos) ->
-    F#info_function{position = dict:fetch(MFA, Fun2Pos)}.
+    try
+        dict:fetch(MFA, Fun2Pos)
+    of Pos ->
+        F#info_function{position = Pos}
+    catch error:_Reason ->
+        error_logger:info_msg("Unknown position of the function ~p.", [MFA]),
+        F
+    end.
 
 
 filename_to_function_positions(FileName) ->
