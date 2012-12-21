@@ -1,6 +1,7 @@
 %% @doc This module parses edoc info into records.
 -module(inferno_lib).
 -export([source_files/1,
+         compiled_files/1,
          handle_module/1,
          filename_to_edoc_xml/1,
          set_positions/2,
@@ -37,6 +38,24 @@ source_files(AppDir) ->
         end,
 
     RegExp = ".erl$",
+    AccIn  = [],
+    %% Handle files recursivelly in the directory.
+    filelib:fold_files(AppDir, RegExp, true, Fun, AccIn).
+
+
+%% @doc Return a map from a module name to its compiled file's location.
+-spec compiled_files(AppDir) -> [{ModuleName, FileName}] when
+        AppDir :: filename:dirname(),
+        ModuleName :: atom(),
+        FileName :: file:filename().
+
+compiled_files(AppDir) ->
+    Fun = fun(FileName, Acc) ->
+        ModuleName = list_to_atom(filename:basename(FileName, ".ebin")),
+        [{ModuleName, FileName} | Acc]
+        end,
+
+    RegExp = ".ebin$",
     AccIn  = [],
     %% Handle files recursivelly in the directory.
     filelib:fold_files(AppDir, RegExp, true, Fun, AccIn).

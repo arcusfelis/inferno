@@ -3,15 +3,17 @@
 %%% @end
 -module(inferno_server).
 -behaviour(gen_server).
+-compile({parse_transform, rum}).
 
 %% ------------------------------------------------------------------
 %% API Function Exports
 %% ------------------------------------------------------------------
 
--export([start_link/2,
-         start/2,
+-export([start_link/1,
+         start/1,
          module_info/3,
-         function_info/3]).
+         function_info/3,
+         add_application/2]).
 
 
 %% ------------------------------------------------------------------
@@ -49,7 +51,8 @@
 %% ------------------------------------------------------------------
 
 -record(state, {
-        module2filename :: dict(),
+        module2source_filename :: dict(),
+        module2compiled_filename :: dict(),
         function_tbl :: ets:tid(),
         module_tbl :: ets:tid(),
         mod_rec_f2p :: dict(),
@@ -65,6 +68,10 @@
 -record(module_info, {
         module_name,
         fields
+}).
+
+-record(add_application, {
+        directory
 }).
 
 %% ------------------------------------------------------------------
@@ -101,10 +108,10 @@
 
 
 %% @doc Start a linked server without supervision.
--spec start_link(filename:directory(), [term()]) -> {ok, x_server()}.
+-spec start_link([term()]) -> {ok, x_server()}.
 
-start_link(Path, Params) ->
-    Args = [Path, Params],
+start_link(Params) ->
+    Args = [Params],
     case proplists:get_value(name, Params) of
         undefined ->
             gen_server:start_link(?MODULE, Args, []);
@@ -116,10 +123,10 @@ start_link(Path, Params) ->
 
 
 %% @doc This function is for testing only.
--spec start(filename:directory(), [term()]) -> {ok, x_server()}.
+-spec start([term()]) -> {ok, x_server()}.
 
-start(Path, Params) ->
-    Args = [Path, Params],
+start(Params) ->
+    Args = [Params],
     gen_server:start_link(?MODULE, Args, []).
 
 
@@ -128,6 +135,12 @@ function_info(Server, MFA, Fields) ->
 
 module_info(Server, ModuleName, Fields) ->
     call(Server, #module_info{module_name = ModuleName, fields = Fields}).
+
+
+-spec add_application(x_server(), filename:directory()) -> ok.
+
+add_application(Server, AppDir) ->
+    call(Server, #add_application{directory = AppDir}).
 
  
 %% ------------------------------------------------------------------
@@ -152,14 +165,15 @@ client_error_handler({error, Reason}) ->
 %% ------------------------------------------------------------------
 
 %% @private
-init([AppDir, _Params]) ->
+init([_Params]) ->
     FunTable = ets:new(inferno_function_table, [{keypos, #info_function.mfa}]),
     ModTable = ets:new(inferno_module_table, [{keypos, #info_module.name}]),
     %% Collect info about positions of the record.
     ModRecF2P = fields_to_position_dict(record_info(fields, info_module)),
     FunRecF2P = fields_to_position_dict(record_info(fields, info_function)),
     State = #state{
-            module2filename = dict:from_list(inferno_lib:source_files(AppDir)),
+            module2source_filename = dict:new(),
+            module2compiled_filename = dict:new(),
             function_tbl = FunTable,
             module_tbl = ModTable,
             mod_rec_f2p = ModRecF2P,
@@ -192,9 +206,19 @@ handle_call(#module_info{module_name = ModuleName, fields = FieldNames},
                               State#state.mod_rec_f2p), %% meta info
         return(Info)
        ]),
-    {reply, Reply, State}.
+    {reply, Reply, State};
 
+handle_call(#add_application{directory = AppDir},
+            _From, State) ->
+    M2SF = dict:from_list(inferno_lib:source_files(AppDir)),
+    M2CF = dict:from_list(inferno_lib:compiled_files(AppDir)),
+    State2 = State#state{ module2source_filename   = patch_dict(old(), M2SF),
+                          module2compiled_filename = patch_dict(old(), M2CF)},
+    {reply, {ok, ok}, State2}.
 
+%% New elements will be added, old ones will be replaced.
+patch_dict(OldDict, NewDict) ->
+    dict:merge(fun(_K,_Old,New) -> New end, OldDict, NewDict).
 
 %% @private
 handle_cast(_Mess, State) ->
@@ -228,7 +252,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 check_module(ModuleName, State) ->
-    #state{module2filename = M2F,
+    #state{module2source_filename = M2F,
            module_tbl = ModTable, 
            function_tbl = FunTable} = State,
     case ets:member(ModTable, ModuleName) of
@@ -317,8 +341,9 @@ fields_to_position_pl([], _N) ->
 
 function_info_test() ->
     AppDir = code:lib_dir(inferno),
-    {ok, S} = ?SRV:start_link(AppDir, []),
-    Info = ?SRV:function_info(S, {?SRV, start_link, 2},
+    {ok, S} = ?SRV:start_link([]),
+    ?SRV:add_application(S, AppDir),
+    Info = ?SRV:function_info(S, {?SRV, start_link, 1},
                               [description, title, position]),
     ?assertMatch([_, _, _], Info),
     io:format(user, "function_info: ~p", [Info]),
@@ -327,7 +352,8 @@ function_info_test() ->
 
 module_info_test() ->
     AppDir = code:lib_dir(inferno),
-    {ok, S} = ?SRV:start_link(AppDir, []),
+    {ok, S} = ?SRV:start_link([]),
+    ?SRV:add_application(S, AppDir),
     Info = ?SRV:module_info(S, ?SRV, [description, title]),
     ?assertMatch([_, _], Info),
     io:format(user, "module_info: ~p", [Info]),
