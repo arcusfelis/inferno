@@ -51,11 +51,11 @@ source_files(AppDir) ->
 
 compiled_files(AppDir) ->
     Fun = fun(FileName, Acc) ->
-        ModuleName = list_to_atom(filename:basename(FileName, ".ebin")),
+        ModuleName = list_to_atom(filename:basename(FileName, ".beam")),
         [{ModuleName, FileName} | Acc]
         end,
 
-    RegExp = ".ebin$",
+    RegExp = ".beam$",
     AccIn  = [],
     %% Handle files recursivelly in the directory.
     filelib:fold_files(AppDir, RegExp, true, Fun, AccIn).

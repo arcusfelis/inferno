@@ -2,7 +2,8 @@
         name, 
         title,
         description,
-        functions = []
+        functions = [],
+        compiled_filename
 }).
 
 -record(info_function, {

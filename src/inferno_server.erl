@@ -13,7 +13,9 @@
          start/1,
          module_info/3,
          function_info/3,
-         add_application/2]).
+         add_application/3,
+         module_names_to_compiled_filenames/2,
+         application_names_to_directories/2]).
 
 
 %% ------------------------------------------------------------------
@@ -53,6 +55,7 @@
 -record(state, {
         module2source_filename :: dict(),
         module2compiled_filename :: dict(),
+        app2dir_filename :: dict(),
         function_tbl :: ets:tid(),
         module_tbl :: ets:tid(),
         mod_rec_f2p :: dict(),
@@ -71,7 +74,16 @@
 }).
 
 -record(add_application, {
+        name,
         directory
+}).
+
+-record(module_names_to_compiled_filenames, {
+        module_names
+}).
+
+-record(application_names_to_directories, {
+        app_names
 }).
 
 %% ------------------------------------------------------------------
@@ -137,10 +149,38 @@ module_info(Server, ModuleName, Fields) ->
     call(Server, #module_info{module_name = ModuleName, fields = Fields}).
 
 
--spec add_application(x_server(), filename:directory()) -> ok.
+%% @doc Returns filenames of modules. 
+%% `MaybeFilename' is undefined, when the module is not found.
+-spec module_names_to_compiled_filenames(Server, ModuleNames) -> M2F when
+    Server :: x_server(),
+    ModuleNames :: [ModuleName],
+    M2F :: [{ModuleName, MaybeFilename}],
+    ModuleName :: atom(),
+    MaybeFilename :: filename:filename() | undefined. 
 
-add_application(Server, AppDir) ->
-    call(Server, #add_application{directory = AppDir}).
+module_names_to_compiled_filenames(_Server, []) ->
+    [];
+module_names_to_compiled_filenames(Server, ModuleNames) ->
+    call(Server, #module_names_to_compiled_filenames{module_names = ModuleNames}).
+
+
+-spec application_names_to_directories(Server, AppNames) -> A2D when
+    Server :: x_server(),
+    AppNames :: [AppName],
+    A2D :: [{AppName, MaybeDirName}],
+    AppName :: atom(),
+    MaybeDirName :: filename:dirname() | undefined. 
+
+application_names_to_directories(_Server, []) ->
+    [];
+application_names_to_directories(Server, AppNames) ->
+    call(Server, #application_names_to_directories{app_names = AppNames}).
+
+
+-spec add_application(x_server(), atom(), filename:directory()) -> ok.
+
+add_application(Server, AppName, AppDir) ->
+    call(Server, #add_application{name = AppName, directory = AppDir}).
 
  
 %% ------------------------------------------------------------------
@@ -174,6 +214,7 @@ init([_Params]) ->
     State = #state{
             module2source_filename = dict:new(),
             module2compiled_filename = dict:new(),
+            app2dir_filename = dict:new(),
             function_tbl = FunTable,
             module_tbl = ModTable,
             mod_rec_f2p = ModRecF2P,
@@ -208,17 +249,28 @@ handle_call(#module_info{module_name = ModuleName, fields = FieldNames},
        ]),
     {reply, Reply, State};
 
-handle_call(#add_application{directory = AppDir},
+handle_call(#add_application{name = AppName, directory = AppDir},
             _From, State) ->
     M2SF = dict:from_list(inferno_lib:source_files(AppDir)),
     M2CF = dict:from_list(inferno_lib:compiled_files(AppDir)),
+    A2D  = dict:from_list([{AppName, AppDir}]),
     State2 = State#state{ module2source_filename   = patch_dict(old(), M2SF),
-                          module2compiled_filename = patch_dict(old(), M2CF)},
-    {reply, {ok, ok}, State2}.
+                          module2compiled_filename = patch_dict(old(), M2CF),
+                          app2dir_filename         = patch_dict(old(), A2D)},
+    {reply, {ok, ok}, State2};
 
-%% New elements will be added, old ones will be replaced.
-patch_dict(OldDict, NewDict) ->
-    dict:merge(fun(_K,_Old,New) -> New end, OldDict, NewDict).
+handle_call(#module_names_to_compiled_filenames{module_names = ModuleNames},
+            _From, State=#state{module2compiled_filename = M2CF}) ->
+    Reply = [{ModuleName, maybe_name_to_filename(ModuleName, M2CF)}
+            || ModuleName <- ModuleNames],
+    {reply, {ok, Reply}, State};
+
+handle_call(#application_names_to_directories{app_names = AppNames},
+            _From, State=#state{app2dir_filename = A2D}) ->
+    Reply = [{AppName, maybe_name_to_filename(AppName, A2D)}
+            || AppName <- AppNames],
+    {reply, {ok, Reply}, State}.
+
 
 %% @private
 handle_cast(_Mess, State) ->
@@ -253,11 +305,12 @@ code_change(_OldVsn, State, _Extra) ->
 
 check_module(ModuleName, State) ->
     #state{module2source_filename = M2F,
+           module2compiled_filename = M2CF,
            module_tbl = ModTable, 
            function_tbl = FunTable} = State,
     case ets:member(ModTable, ModuleName) of
         false ->
-            Result = analyse_module(ModuleName, M2F, ModTable, FunTable),
+            Result = analyse_module(ModuleName, M2F, M2CF, ModTable, FunTable),
             %% Put the empty module, if an error.
             %% It helps to escape of file reading again.
             [ets:insert(ModTable, #info_module{name = ModuleName})
@@ -268,36 +321,44 @@ check_module(ModuleName, State) ->
     end.
 
 
--spec analyse_module(ModuleName, M2F, ModTable, FunTable) -> 
+-spec analyse_module(ModuleName, M2F, M2CF, ModTable, FunTable) -> 
     {ok, Status} | {error, Error} when
     ModuleName :: atom(),
     M2F :: dict(),
+    M2CF :: dict(),
     ModTable :: ets:tid(),
     FunTable :: ets:tid(),
     Status :: loaded,
     Error :: atom().
 
-analyse_module(ModuleName, M2F, ModTable, FunTable) ->
+analyse_module(ModuleName, M2F, M2CF, ModTable, FunTable) ->
     do([error_m ||
-        FileName <- module_name_to_filename(ModuleName, M2F),
+        FileName <- name_to_filename(ModuleName, M2F),
         XML <- inferno_lib:filename_to_edoc_xml(FileName),
         MFA2PosDict <- inferno_lib:filename_to_function_positions(FileName),
         IM = inferno_lib:handle_module(XML),
         IM2 = #info_module{functions = Funs} = 
             inferno_lib:set_positions(IM, MFA2PosDict),
-        IM3 = IM2#info_module{functions = undefined},
+        BeamFN = maybe_name_to_filename(ModuleName, M2CF),
+        IM3 = IM2#info_module{functions = undefined, 
+                              compiled_filename = BeamFN},
         true = ets:insert(ModTable, IM3),
         true = ets:insert(FunTable, Funs),
         return(loaded)
        ]).
 
 
-module_name_to_filename(ModuleName, M2F) ->
-    case dict:find(ModuleName, M2F) of
+name_to_filename(Name, N2F) ->
+    case dict:find(Name, N2F) of
         {ok, _FileName} = X -> X;
         error -> {error, module_not_found}
     end.
 
+maybe_name_to_filename(Name, N2F) ->
+    case dict:find(Name, N2F) of
+        {ok, FileName} -> FileName;
+        error -> undefined
+    end.
 
 
 %% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -335,6 +396,12 @@ fields_to_position_pl([H|T], N) ->
 fields_to_position_pl([], _N) ->
     [].
 
+
+%% New elements will be added, old ones will be replaced.
+patch_dict(OldDict, NewDict) ->
+    dict:merge(fun(_K,_Old,New) -> New end, OldDict, NewDict).
+
+
 %% ------------------------------------------------------------------
 %% Tests
 %% ------------------------------------------------------------------
@@ -342,7 +409,7 @@ fields_to_position_pl([], _N) ->
 function_info_test() ->
     AppDir = code:lib_dir(inferno),
     {ok, S} = ?SRV:start_link([]),
-    ?SRV:add_application(S, AppDir),
+    ?SRV:add_application(S, inferno, AppDir),
     Info = ?SRV:function_info(S, {?SRV, start_link, 1},
                               [description, title, position]),
     ?assertMatch([_, _, _], Info),
@@ -353,7 +420,7 @@ function_info_test() ->
 module_info_test() ->
     AppDir = code:lib_dir(inferno),
     {ok, S} = ?SRV:start_link([]),
-    ?SRV:add_application(S, AppDir),
+    ?SRV:add_application(S, inferno, AppDir),
     Info = ?SRV:module_info(S, ?SRV, [description, title]),
     ?assertMatch([_, _], Info),
     io:format(user, "module_info: ~p", [Info]),
