@@ -3,7 +3,6 @@
 %%% @end
 -module(inferno_server).
 -behaviour(gen_server).
--compile({parse_transform, rum}).
 
 %% ------------------------------------------------------------------
 %% API Function Exports
@@ -55,6 +54,7 @@
 -record(state, {
         module2source_filename :: dict(),
         module2compiled_filename :: dict(),
+        module2doc_filename :: dict(),
         app2dir_filename :: dict(),
         function_tbl :: ets:tid(),
         module_tbl :: ets:tid(),
@@ -100,6 +100,7 @@
 
 -compile({parse_transform, seqbind}).
 -compile({parse_transform, do}).
+-compile({parse_transform, rum}).
 
 
 %% ------------------------------------------------------------------
@@ -214,6 +215,7 @@ init([_Params]) ->
     State = #state{
             module2source_filename = dict:new(),
             module2compiled_filename = dict:new(),
+            module2doc_filename = dict:new(),
             app2dir_filename = dict:new(),
             function_tbl = FunTable,
             module_tbl = ModTable,
@@ -253,10 +255,11 @@ handle_call(#add_application{name = AppName, directory = AppDir},
             _From, State) ->
     M2SF = dict:from_list(inferno_lib:source_files(AppDir)),
     M2CF = dict:from_list(inferno_lib:compiled_files(AppDir)),
-    A2D  = dict:from_list([{AppName, AppDir}]),
+    M2DF = dict:from_list(inferno_lib:doc_files(AppDir)),
     State2 = State#state{ module2source_filename   = patch_dict(old(), M2SF),
                           module2compiled_filename = patch_dict(old(), M2CF),
-                          app2dir_filename         = patch_dict(old(), A2D)},
+                          module2doc_filename      = patch_dict(old(), M2DF),
+                          app2dir_filename         = dict:store(AppName, AppDir, old())},
     {reply, {ok, ok}, State2};
 
 handle_call(#module_names_to_compiled_filenames{module_names = ModuleNames},
@@ -306,11 +309,13 @@ code_change(_OldVsn, State, _Extra) ->
 check_module(ModuleName, State) ->
     #state{module2source_filename = M2F,
            module2compiled_filename = M2CF,
+           module2doc_filename = M2DF,
            module_tbl = ModTable, 
            function_tbl = FunTable} = State,
     case ets:member(ModTable, ModuleName) of
         false ->
-            Result = analyse_module(ModuleName, M2F, M2CF, ModTable, FunTable),
+            Result = analyse_module(ModuleName, M2F, M2CF, M2DF, 
+                                    ModTable, FunTable),
             %% Put the empty module, if an error.
             %% It helps to escape of file reading again.
             [ets:insert(ModTable, #info_module{name = ModuleName})
@@ -321,24 +326,30 @@ check_module(ModuleName, State) ->
     end.
 
 
--spec analyse_module(ModuleName, M2F, M2CF, ModTable, FunTable) -> 
+-spec analyse_module(ModuleName, M2F, M2CF, M2DF, ModTable, FunTable) -> 
     {ok, Status} | {error, Error} when
     ModuleName :: atom(),
     M2F :: dict(),
     M2CF :: dict(),
+    M2DF :: dict(),
     ModTable :: ets:tid(),
     FunTable :: ets:tid(),
     Status :: loaded,
     Error :: atom().
 
-analyse_module(ModuleName, M2F, M2CF, ModTable, FunTable) ->
+analyse_module(ModuleName, M2F, M2CF, M2DF, ModTable, FunTable) ->
     do([error_m ||
         FileName <- name_to_filename(ModuleName, M2F),
-        XML <- inferno_lib:filename_to_edoc_xml(FileName),
+        XML <- inferno_edoc_xml_reader:filename_to_edoc_xml(FileName),
         MFA2PosDict <- inferno_lib:filename_to_function_positions(FileName),
-        IM = inferno_lib:handle_module(XML),
+        %% src/Module.erl
+        SrcIM = inferno_edoc_xml_reader:handle_module(XML),
+        %% doc/src/Module.xml
+        %% DocIM is undefined, if there is no the xml file.
+        DocIM = read_module_documentation(ModuleName, M2DF),
+        IM1 = merge_modules(SrcIM, DocIM),
         IM2 = #info_module{functions = Funs} = 
-            inferno_lib:set_positions(IM, MFA2PosDict),
+            inferno_lib:set_positions(IM1, MFA2PosDict),
         BeamFN = maybe_name_to_filename(ModuleName, M2CF),
         IM3 = IM2#info_module{functions = undefined, 
                               compiled_filename = BeamFN},
@@ -357,6 +368,83 @@ name_to_filename(Name, N2F) ->
 maybe_name_to_filename(Name, N2F) ->
     case dict:find(Name, N2F) of
         {ok, FileName} -> FileName;
+        error -> undefined
+    end.
+
+
+%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%% merge_modules
+%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+%% @doc Update IM1 with values of IM2.
+-spec merge_modules(IM, IM) -> IM when
+    IM :: #info_module{} | undefined.
+
+merge_modules(undefined, undefined) -> erlang:error(badarg);
+merge_modules(IM, undefined) -> IM;
+merge_modules(undefined, IM) -> IM;
+merge_modules(IM1, IM2) ->
+    Fields = record_info(fields, info_module),
+    Vals1 = record_values(IM1),
+    Vals2 = record_values(IM2),
+    Vals3 = lists:zipwith3(fun merge_module_fields/3, Fields, Vals1, Vals2),
+    list_to_tuple([info_module|Vals3]).
+
+
+-spec merge_module_fields(FieldName, Val, Val) -> Val when
+    FieldName :: atom(),
+    Val :: term().
+
+merge_module_fields(_FieldName, X, undefined) -> X;
+merge_module_fields(_FieldName, undefined, Y) -> Y;
+merge_module_fields(functions, X, Y) -> 
+    %% For each element of the list X, update it with values of the element 
+    %% from Y.
+    lists2:ordkeymerge_with(#info_function.mfa, fun merge_functions/2, X, Y);
+merge_module_fields(_FieldName, _X, Y) -> Y.
+
+
+
+-spec merge_functions(IF, IF) -> IF when
+    IF :: #info_function{} | undefined.
+
+merge_functions(undefined, undefined) -> erlang:error(badarg);
+merge_functions(IF, undefined) -> IF;
+merge_functions(undefined, IF) -> IF;
+merge_functions(IF1, IF2) ->
+    Fields = record_info(fields, info_function),
+    Vals1 = record_values(IF1),
+    Vals2 = record_values(IF2),
+    Vals3 = lists:zipwith3(fun merge_function_fields/3, Fields, Vals1, Vals2),
+    list_to_tuple([info_function|Vals3]).
+
+
+-spec merge_function_fields(FieldName, Val, Val) -> Val when
+    FieldName :: atom(),
+    Val :: term().
+
+merge_function_fields(_FieldName, X, undefined) -> X;
+merge_function_fields(_FieldName, _X, Y) -> Y.
+
+
+record_values(Rec) ->
+    tl(tuple_to_list(Rec)).
+
+
+%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%% read_module_documentation
+%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+read_module_documentation(ModuleName, M2DF) ->
+    case dict:find(ModuleName, M2DF) of
+        {ok, FileName} -> 
+            case inferno_refman_xml_reader:filename_to_xml(FileName) of
+                {ok, XML} -> inferno_refman_xml_reader:handle_module(XML);
+                {error, Reason} -> 
+                    error_logger:error_msg("inferno_refman_xml_reader "
+                        "returns ~p. Ignore and continue.~n", [Reason]),
+                    undefined
+            end;
         error -> undefined
     end.
 
