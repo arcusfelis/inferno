@@ -439,10 +439,20 @@ read_module_documentation(ModuleName, M2DF) ->
     case dict:find(ModuleName, M2DF) of
         {ok, FileName} -> 
             case inferno_refman_xml_reader:filename_to_xml(FileName) of
-                {ok, XML} -> inferno_refman_xml_reader:handle_module(XML);
+                {ok, XML} -> 
+                    try
+                    inferno_refman_xml_reader:handle_module(XML)
+                    catch error:Reason ->
+                        error_logger:error_msg("Bad file format ~ts. "
+                            "Ignore and continue.~nError ~p~n"
+                            "Stacktrace:~n~p~n",
+                            [FileName, Reason, erlang:get_stacktrace()]),
+                        undefined
+                    end;
                 {error, Reason} -> 
+                    %% File is not found?
                     error_logger:error_msg("inferno_refman_xml_reader "
-                        "returns ~p. Ignore and continue.~n", [Reason]),
+                        "returns ~p.~n Ignore and continue.~n", [Reason]),
                     undefined
             end;
         error -> undefined

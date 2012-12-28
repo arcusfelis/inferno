@@ -41,7 +41,9 @@ handle_erlref(#xmlElement{name = erlref, content = Con}) ->
     X@ = #info_module{},
     X@ = lists:foldl(fun handle_erlref_element/2, X@, Con),
     X@ = set_function_module_names(X@),
-    sort_functions(X@).
+    X@ = sort_functions(X@),
+    validate_functions(X@).
+
 
 set_function_module_names(M=#info_module{name = ModuleName, functions = Funs}) ->
     NewFuns = [set_function_mfa(F#info_function{module_name = ModuleName})
@@ -50,6 +52,14 @@ set_function_module_names(M=#info_module{name = ModuleName, functions = Funs}) -
 
 sort_functions(M) ->
     M#info_module{functions = lists:keysort(#info_function.mfa, old())}.
+
+validate_functions(M=#info_module{functions = Funs}) ->
+    {ValidFuns, InvalidFuns} = lists:partition(fun is_valid_function/1, Funs),
+    [error:error_msg("Invalid function: ~p~n", [X]) || X <- InvalidFuns],
+    M#info_module{functions = ValidFuns}.
+
+is_valid_function(#info_function{module_name = M, name = F, arity = A}) ->
+    not lists:member(undefined, [M, F, A]).
 
 set_function_mfa(X=#info_function{module_name = M, name = F, arity = A}) ->
     X#info_function{mfa = {M, F, A}}.
