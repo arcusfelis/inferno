@@ -15,7 +15,9 @@ filename_to_xml(FileName) ->
     FetchPath = [filename:join(DocGenPrivDirName, dtd),
                  filename:join(DocGenPrivDirName, dtd_html_entities)],
     try
-        xmerl_scan:file(FileName, [{fetch_path, FetchPath}]) 
+        xmerl_scan:file(FileName, [{fetch_path, FetchPath}, 
+                                   {comments, false}, 
+                                   {space, normalize}]) 
     of
         {error, Reason} ->
             {error, Reason};
@@ -55,7 +57,7 @@ sort_functions(M) ->
 
 validate_functions(M=#info_module{functions = Funs}) ->
     {ValidFuns, InvalidFuns} = lists:partition(fun is_valid_function/1, Funs),
-    [error:error_msg("Invalid function: ~p~n", [X]) || X <- InvalidFuns],
+    [error_logger:error_msg("Invalid function: ~p~n", [X]) || X <- InvalidFuns],
     M#info_module{functions = ValidFuns}.
 
 is_valid_function(#info_function{module_name = M, name = F, arity = A}) ->
@@ -88,8 +90,10 @@ handle_function(#xmlElement{name = func, content = Con}) ->
 
 
 
-handle_function_element(#xmlElement{name = name, attributes = Attrs}, X) ->
-    lists:foldl(fun handle_function_name_attribute/2, X, Attrs);
+handle_function_element(#xmlElement{name = name, attributes = Attrs, content = Con}, X@) ->
+    FunDefinition = elems_to_text(Con),
+    X@ = handle_function_definition(FunDefinition, X@),
+    lists:foldl(fun handle_function_name_attribute/2, X@, Attrs);
 handle_function_element(#xmlElement{name = fsummary, content = Con}, X) ->
     X#info_function{title = elems_to_text(Con)};
 handle_function_element(#xmlElement{name = desc, content = Con}, X) ->
@@ -97,6 +101,11 @@ handle_function_element(#xmlElement{name = desc, content = Con}, X) ->
 handle_function_element(_, X) ->
     X.
 
+%% There are 2 cases:
+%%
+%% <func><name>set_trace(Targets) -> void()</name></func>
+%% or
+%% <func><name name="set_trace" arity="1"/></func>
 
 handle_function_name_attribute(#xmlAttribute{name = name, value = Value}, X) ->
     X#info_function{name = list_to_atom(Value)};
@@ -105,12 +114,27 @@ handle_function_name_attribute(#xmlAttribute{name = arity, value = Value}, X) ->
 handle_function_name_attribute(_, X) ->
     X.
 
+
+%% `FunDefinition' is `set_trace(Targets) -> void()'.
+handle_function_definition(<<>>, X) ->
+    X;
+handle_function_definition(FunDefinition, X) ->
+    case binary:split(FunDefinition, [<<$(>>, <<$)>>], [global]) of
+        [Name, ArgsBin|_] ->
+            Args = binary:split(ArgsBin, <<$,>>, [global, trim]),
+            X#info_function{name = bin_to_trimmed_atom(Name),
+                            arity = length(Args)};
+        _ ->
+            X
+    end.
+
+
 %% ------------------------------------------------------------------
 %% Utilities
 %% ------------------------------------------------------------------
 
 elems_to_text(XmlElems) ->
-    unicode:characters_to_binary(elems_to_iolist(XmlElems)).
+    binary2:trim(unicode:characters_to_binary(elems_to_iolist(XmlElems)), $ ).
 
 elems_to_iolist([#xmlText{value = Text}|T]) ->
     [Text|elems_to_iolist(T)];
@@ -121,7 +145,11 @@ elems_to_iolist([]) ->
 
 
 elems_to_atom(XmlElems) ->
-    list_to_atom(binary_to_list(elems_to_text(XmlElems))).
+    binary_to_atom(elems_to_text(XmlElems), latin1).
+
+
+bin_to_trimmed_atom(Bin) ->
+    binary_to_atom(binary2:trim(Bin, $ ), latin1).
 
 
 %% ------------------------------------------------------------------
@@ -134,3 +162,13 @@ filename_test() ->
     ModRec = handle_module(XML),
     io:format(user, "ModRec: ~p", [ModRec]),
     ok.
+
+
+handle_function_definition_test_() ->
+    [?_assertEqual(handle_function_definition(<<"set_trace(Targets) -> void()">>, 
+                                              #info_function{}),
+                   #info_function{name = set_trace, arity = 1})
+    ,?_assertEqual(handle_function_definition(<<"accept_send(Ip, Port) -> boolean()">>, 
+                                              #info_function{}),
+                   #info_function{name = accept_send, arity = 2})
+    ].
