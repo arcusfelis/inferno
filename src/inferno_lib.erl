@@ -4,7 +4,8 @@
          compiled_files/1,
          doc_files/1,
          set_positions/2,
-         filename_to_function_positions/1]).
+         filename_to_function_positions/1,
+         measure_time/2]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -130,3 +131,13 @@ is_attribute_form(Form, Name) ->
     end.
 
 
+measure_time(ExecFn, FormatFn) ->
+    Start = now(),
+    try
+        ExecFn()
+    after
+        Stop = now(),
+        MicroSeconds = timer:now_diff(Stop, Start),
+        FormatFn(MicroSeconds)
+    end.
+    

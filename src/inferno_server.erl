@@ -56,6 +56,7 @@
         module2compiled_filename :: dict(),
         module2doc_filename :: dict(),
         app2dir_filename :: dict(),
+        module2app_name :: dict(),
         function_tbl :: ets:tid(),
         module_tbl :: ets:tid(),
         mod_rec_f2p :: dict(),
@@ -216,6 +217,7 @@ init([_Params]) ->
             module2source_filename = dict:new(),
             module2compiled_filename = dict:new(),
             module2doc_filename = dict:new(),
+            module2app_name = dict:new(),
             app2dir_filename = dict:new(),
             function_tbl = FunTable,
             module_tbl = ModTable,
@@ -229,7 +231,7 @@ init([_Params]) ->
 handle_call(#function_info{mfa = MFA, fields = FieldNames}, _From, State) ->
     Reply = 
     do([error_m || 
-        _ModuleStatus <- check_module(mfa_to_module_name(MFA), State),
+        _ModuleStatus <- check_module_functions(mfa_to_module_name(MFA), State),
         Info <- lookup_fields(State#state.function_tbl, %% table
                               MFA,                      %% key
                               FieldNames,               %% atoms
@@ -256,9 +258,13 @@ handle_call(#add_application{name = AppName, directory = AppDir},
     M2SF = dict:from_list(inferno_lib:source_files(AppDir)),
     M2CF = dict:from_list(inferno_lib:compiled_files(AppDir)),
     M2DF = dict:from_list(inferno_lib:doc_files(AppDir)),
+    %% Get module names.
+    Mods = lists:usort(dict:fetch_keys(M2CF) ++ dict:fetch_keys(M2SF)),
+    M2A  = dict:from_list([{ModName, AppName} || ModName <- Mods]),
     State2 = State#state{ module2source_filename   = patch_dict(old(), M2SF),
                           module2compiled_filename = patch_dict(old(), M2CF),
                           module2doc_filename      = patch_dict(old(), M2DF),
+                          module2app_name          = patch_dict(old(), M2A),
                           app2dir_filename         = dict:store(AppName, AppDir, old())},
     {reply, {ok, ok}, State2};
 
@@ -310,11 +316,12 @@ check_module(ModuleName, State) ->
     #state{module2source_filename = M2F,
            module2compiled_filename = M2CF,
            module2doc_filename = M2DF,
+           module2app_name = M2A,
            module_tbl = ModTable, 
            function_tbl = FunTable} = State,
     case ets:member(ModTable, ModuleName) of
         false ->
-            Result = analyse_module(ModuleName, M2F, M2CF, M2DF, 
+            Result = analyse_module(ModuleName, M2F, M2CF, M2DF, M2A,
                                     ModTable, FunTable),
             %% Put the empty module, if an error.
             %% It helps to escape of file reading again.
@@ -326,34 +333,90 @@ check_module(ModuleName, State) ->
     end.
 
 
--spec analyse_module(ModuleName, M2F, M2CF, M2DF, ModTable, FunTable) -> 
+-spec analyse_module(ModName, M2F, M2CF, M2DF, M2A, ModTable, FunTable) -> 
     {ok, Status} | {error, Error} when
-    ModuleName :: atom(),
+    ModName :: atom(),
     M2F :: dict(),
     M2CF :: dict(),
     M2DF :: dict(),
+    M2A :: dict(),
     ModTable :: ets:tid(),
     FunTable :: ets:tid(),
     Status :: loaded,
     Error :: atom().
 
-analyse_module(ModuleName, M2F, M2CF, M2DF, ModTable, FunTable) ->
+analyse_module(ModName, M2F, M2CF, M2DF, M2A, ModTable, FunTable) ->
     do([error_m ||
-        FileName <- name_to_filename(ModuleName, M2F),
+        FileName <- name_to_filename(ModName, M2F),
+        %% src/Module.erl
+        SrcIM <- inferno_edoc_module_reader:parse_file(FileName),
+        %% doc/src/Module.xml
+        %% DocIM is undefined, if there is no the xml file.
+        DocIM = read_module_documentation(ModName, M2DF),
+        IM1 = merge_modules(SrcIM, DocIM),
+        IM2 = #info_module{functions = Funs} = 
+            inferno_lib:set_positions(IM1, MFA2PosDict),
+        BeamFN = maybe_name_to_filename(ModName, M2CF),
+        IM3 = IM2#info_module{functions = undefined, 
+                              compiled_filename = BeamFN},
+        IM4 = IM3#info_module{application_name = maybe_dict_find(ModName, M2A)},
+        true = ets:insert(ModTable, IM4),
+        true = ets:insert(FunTable, Funs),
+        return(loaded)
+       ]).
+
+
+check_module_functions(ModuleName, State) ->
+    #state{module2source_filename = M2F,
+           module2compiled_filename = M2CF,
+           module2doc_filename = M2DF,
+           module2app_name = M2A,
+           module_tbl = ModTable, 
+           function_tbl = FunTable} = State,
+    case ets:member(ModTable, ModuleName) of
+        false ->
+            Result = analyse_module_functions(ModuleName, M2F, M2CF, M2DF, M2A,
+                                    ModTable, FunTable),
+            %% Put the empty module, if an error.
+            %% It helps to escape of file reading again.
+            [ets:insert(ModTable, #info_module{name = ModuleName})
+             || error =:= element(1, Result)],
+            Result;
+        true ->
+            {ok, already_loaded}
+    end.
+
+
+-spec analyse_module_functions(ModName, M2F, M2CF, M2DF, M2A, ModTable, FunTable) -> 
+    {ok, Status} | {error, Error} when
+    ModName :: atom(),
+    M2F :: dict(),
+    M2CF :: dict(),
+    M2DF :: dict(),
+    M2A :: dict(),
+    ModTable :: ets:tid(),
+    FunTable :: ets:tid(),
+    Status :: loaded,
+    Error :: atom().
+
+analyse_module_functions(ModName, M2F, M2CF, M2DF, M2A, ModTable, FunTable) ->
+    do([error_m ||
+        FileName <- name_to_filename(ModName, M2F),
         XML <- inferno_edoc_xml_reader:filename_to_edoc_xml(FileName),
         MFA2PosDict <- inferno_lib:filename_to_function_positions(FileName),
         %% src/Module.erl
         SrcIM = inferno_edoc_xml_reader:handle_module(XML),
         %% doc/src/Module.xml
         %% DocIM is undefined, if there is no the xml file.
-        DocIM = read_module_documentation(ModuleName, M2DF),
+        DocIM = read_module_functions_documentation(ModName, M2DF),
         IM1 = merge_modules(SrcIM, DocIM),
         IM2 = #info_module{functions = Funs} = 
             inferno_lib:set_positions(IM1, MFA2PosDict),
-        BeamFN = maybe_name_to_filename(ModuleName, M2CF),
+        BeamFN = maybe_name_to_filename(ModName, M2CF),
         IM3 = IM2#info_module{functions = undefined, 
                               compiled_filename = BeamFN},
-        true = ets:insert(ModTable, IM3),
+        IM4 = IM3#info_module{application_name = maybe_dict_find(ModName, M2A)},
+        true = ets:insert(ModTable, IM4),
         true = ets:insert(FunTable, Funs),
         return(loaded)
        ]).
@@ -366,8 +429,11 @@ name_to_filename(Name, N2F) ->
     end.
 
 maybe_name_to_filename(Name, N2F) ->
-    case dict:find(Name, N2F) of
-        {ok, FileName} -> FileName;
+    maybe_dict_find(Name, N2F).
+
+maybe_dict_find(Name, Dict) ->
+    case dict:find(Name, Dict) of
+        {ok, Val} -> Val;
         error -> undefined
     end.
 
@@ -438,23 +504,61 @@ record_values(Rec) ->
 read_module_documentation(ModuleName, M2DF) ->
     case dict:find(ModuleName, M2DF) of
         {ok, FileName} -> 
-            case inferno_refman_xml_reader:filename_to_xml(FileName) of
-                {ok, XML} -> 
-                    try
-                    inferno_refman_xml_reader:handle_module(XML)
-                    catch error:Reason ->
-                        error_logger:error_msg("Bad file format ~ts. "
-                            "Ignore and continue.~nError ~p~n"
-                            "Stacktrace:~n~p~n",
-                            [FileName, Reason, erlang:get_stacktrace()]),
+            ExecFn = fun() ->
+                case inferno_refman_xml_module_reader:parse_file(FileName) of
+                    {ok, XML} -> 
+                        try
+                        inferno_refman_xml_reader:handle_module(XML)
+                        catch error:Reason ->
+                            error_logger:error_msg("Bad file format ~ts. "
+                                "Ignore and continue.~nError ~p~n"
+                                "Stacktrace:~n~p~n",
+                                [FileName, Reason, erlang:get_stacktrace()]),
+                            undefined
+                        end;
+                    {error, Reason} -> 
+                        %% File is not found?
+                        error_logger:error_msg("inferno_refman_xml_reader "
+                            "returns ~p.~n Ignore and continue.~n", [Reason]),
                         undefined
-                    end;
-                {error, Reason} -> 
-                    %% File is not found?
-                    error_logger:error_msg("inferno_refman_xml_reader "
-                        "returns ~p.~n Ignore and continue.~n", [Reason]),
-                    undefined
-            end;
+                end
+            end,
+            FormatFn = fun(MicroSeconds) ->
+                    io:format("Parsed a refman file ~ts for ~p microseconds.~n",
+                              [FileName, MicroSeconds])
+            end,
+            inferno_lib:measure_time(ExecFn, FormatFn);
+        error -> undefined
+    end.
+
+
+read_module_functions_documentation(ModuleName, M2DF) ->
+    case dict:find(ModuleName, M2DF) of
+        {ok, FileName} -> 
+            ExecFn = fun() ->
+                case inferno_refman_xml_reader:filename_to_xml(FileName) of
+                    {ok, XML} -> 
+                        try
+                        inferno_refman_xml_reader:handle_module(XML)
+                        catch error:Reason ->
+                            error_logger:error_msg("Bad file format ~ts. "
+                                "Ignore and continue.~nError ~p~n"
+                                "Stacktrace:~n~p~n",
+                                [FileName, Reason, erlang:get_stacktrace()]),
+                            undefined
+                        end;
+                    {error, Reason} -> 
+                        %% File is not found?
+                        error_logger:error_msg("inferno_refman_xml_reader "
+                            "returns ~p.~n Ignore and continue.~n", [Reason]),
+                        undefined
+                end
+            end,
+            FormatFn = fun(MicroSeconds) ->
+                    io:format("Parsed a refman file ~ts for ~p microseconds.~n",
+                              [FileName, MicroSeconds])
+            end,
+            inferno_lib:measure_time(ExecFn, FormatFn);
         error -> undefined
     end.
 

@@ -158,9 +158,11 @@ bin_to_trimmed_atom(Bin) ->
 
 filename_test() ->
     FileName = code:lib_dir(inferno) ++ "/test/data/filename.xml",
-    {ok, XML} = filename_to_xml(FileName),
-    ModRec = handle_module(XML),
-    io:format(user, "ModRec: ~p", [ModRec]),
+    io:format(user, "~n", []),
+    F1 = fun() -> {ok, XML} = filename_to_xml(FileName), handle_module(XML) end,
+    F2 = fun(MicroSeconds) -> io:format(user, "Parsed for ~p.~n", [MicroSeconds]) end,
+    ModRec = inferno_lib:measure_time(F1, F2),
+%   io:format(user, "ModRec: ~p", [ModRec]),
     ok.
 
 

@@ -1,5 +1,6 @@
 -record(info_module, {
         name, 
+        application_name,
         title,
         description,
         functions = [],
