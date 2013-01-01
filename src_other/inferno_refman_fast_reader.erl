@@ -1,7 +1,7 @@
 %% @doc This module parses refman info into records.
 %% It ia a simplified version of `inferno_refman_xml_reader'.
--module(inferno_refman_xml_module_reader).
--export([]).
+-module(inferno_refman_fast_reader).
+-export([parse_file/1]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -13,7 +13,7 @@
 -record(startElement, {uri, local_name, qualified_name, attributes}).
 -record(endElement, {uri, local_name, qualified_name}).
 
-parse_xml(FileName) ->
+parse_file(FileName) ->
     try
         State = #state{module = #info_module{}},
         %% EventState is passed as a reason.
@@ -97,8 +97,8 @@ new_name(Chars) ->
 
 filename_test() ->
     FileName = code:lib_dir(inferno) ++ "/test/data/filename.xml",
-    F1 = fun() -> parse_xml(FileName) end,
+    F1 = fun() -> parse_file(FileName) end,
     F2 = fun(MicroSeconds) -> io:format(user, "Parsed for ~p.~n", [MicroSeconds]) end,
     Res = inferno_lib:measure_time(F1, F2),
-    io:format(user, "parse_xml/1 returned ~p.~n", [Res]),
+    io:format(user, "parse_file/1 returned ~p.~n", [Res]),
     ok.

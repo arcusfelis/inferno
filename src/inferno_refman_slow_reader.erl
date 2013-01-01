@@ -1,13 +1,31 @@
 %% @doc This module parses refman info into records.
 -module(inferno_refman_xml_reader).
--export([handle_module/1,
-         filename_to_xml/1]).
+-export([parse_file/1]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("inferno/include/inferno.hrl").
 -compile({parse_transform, seqbind}).
 -compile({parse_transform, rum}).
+
+
+parse_file(FileName) ->
+    case filename_to_edoc_xml(FileName) of
+        {ok, XML} ->
+            try_handle_module(FileName, XML);
+        {error, Reason} ->
+            {error, {Reason, FileName}}
+    end.
+
+
+try_handle_module(FileName, XML) ->
+    try
+        {ok, handle_module(XML)}
+    error:Reason ->
+        {error, {Reason, Filename, erlang:get_stacktrace()}}
+    end.
+        
+
 
 
 filename_to_xml(FileName) ->

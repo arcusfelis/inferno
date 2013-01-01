@@ -1,7 +1,6 @@
 %% @doc This module parses edoc info into records.
--module(inferno_edoc_xml_reader).
--export([handle_module/1,
-         filename_to_edoc_xml/1]).
+-module(inferno_edoc_slow_reader).
+-export([fill/1]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -9,6 +8,33 @@
 -compile({parse_transform, seqbind}).
 -compile({parse_transform, rum}).
 
+
+fill(InM=#info_module{source_filename = FileName}) ->
+    case parse_file(FileName) of
+        {ok, OutM} ->
+            inferno_lib:merge_modules(InM, OutM);
+        {error, Reason} ->
+            lager:error("Parser error: ~p~n", [Reason]),
+            InM
+    end.
+
+
+parse_file(FileName) ->
+    case filename_to_edoc_xml(FileName) of
+        {ok, XML} ->
+            try_handle_module(FileName, XML);
+        {error, Reason} ->
+            {error, {Reason, FileName}}
+    end.
+
+
+try_handle_module(FileName, XML) ->
+    try
+        {ok, handle_module(XML)}
+    catch error:Reason ->
+        {error, {Reason, FileName, erlang:get_stacktrace()}}
+    end.
+        
 
 filename_to_edoc_xml(FileName) ->
     try
@@ -18,6 +44,7 @@ filename_to_edoc_xml(FileName) ->
     catch Type:Error ->
         {error, {Type, Error, erlang:get_stacktrace()}}
     end.
+        
 
 
 %% ------------------------------------------------------------------
@@ -106,7 +133,7 @@ handle_function_attribute(_, X) ->
 %% ------------------------------------------------------------------
 
 elems_to_text(XmlElems) ->
-    unicode:characters_to_binary(elems_to_iolist(XmlElems)).
+    empty_to_undef(unicode:characters_to_binary(elems_to_iolist(XmlElems))).
 
 elems_to_iolist([#xmlText{value = Text}|T]) ->
     [Text|elems_to_iolist(T)];
@@ -118,6 +145,8 @@ elems_to_iolist([]) ->
 attr_to_boolean("yes") -> true;
 attr_to_boolean(_) -> false.
 
+empty_to_undef(<<>>) -> undefined;
+empty_to_undef(Bin)  -> Bin.
 
 %% ------------------------------------------------------------------
 %% Tests
@@ -131,10 +160,4 @@ this_module_test() ->
     F2 = fun(MicroSeconds) -> io:format(user, "Parsed for ~p.~n", [MicroSeconds]) end,
     ModRec = inferno_lib:measure_time(F1, F2),
     io:format(user, "ModRec: ~p", [ModRec]),
-    ok.
-
-this_module_positions_test() ->
-    FileName = code:lib_dir(inferno) ++ "/src/inferno_lib.erl",
-    {ok, MFA2PosDict} = inferno_lib:filename_to_function_positions(FileName),
-    io:format(user, "MFA2PosDict: ~p", [dict:to_list(MFA2PosDict)]),
     ok.

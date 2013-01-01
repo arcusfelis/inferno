@@ -3,14 +3,14 @@
 -export([source_files/1,
          compiled_files/1,
          doc_files/1,
-         set_positions/2,
-         filename_to_function_positions/1,
-         measure_time/2]).
+         measure_time/2,
+         merge_modules/2]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("inferno/include/inferno.hrl").
 -compile({parse_transform, seqbind}).
+-compile({parse_transform, gin}).
 
 
 
@@ -77,58 +77,7 @@ find_doc_files(SrcDocDir) ->
     filelib:fold_files(SrcDocDir, RegExp, true, Fun, AccIn).
 
 
-%% ------------------------------------------------------------------
-%% These functions allows to extract function positions from AST
-%% ------------------------------------------------------------------
 
-set_positions(M=#info_module{functions = Funs}, Fun2Pos) ->
-    NewFuns = [set_function_position(F, Fun2Pos) || F <- Funs],
-    M#info_module{functions = NewFuns}.
-    
-set_function_position(F=#info_function{mfa = MFA}, Fun2Pos) ->
-    try
-        dict:fetch(MFA, Fun2Pos)
-    of Pos ->
-        F#info_function{position = Pos}
-    catch error:_Reason ->
-        error_logger:info_msg("Unknown position of the function ~p.", [MFA]),
-        F
-    end.
-
-
-filename_to_function_positions(FileName) ->
-    case epp_dodger:parse_file(FileName, []) of
-        {ok, Forms} ->
-            ModForm = lists2:filter_head(is_attribute_form(module), Forms),
-            ModName = erl_syntax:atom_value(hd(
-                erl_syntax:attribute_arguments(ModForm))),
-            Dict = dict:from_list(function_positions(Forms, ModName)),
-            {ok, Dict};
-        {error, _} = Error ->
-            Error
-    end.
-    
-
-
-function_positions(Forms, ModName) ->
-    [{to_mfa(ModName, F), erl_syntax:get_pos(F)}
-     || F <- Forms, erl_syntax:type(F) =:= function].
-
-
-to_mfa(ModName, F) ->
-    FunName = erl_syntax:atom_value(erl_syntax:function_name(F)),
-    {ModName, FunName, erl_syntax:function_arity(F)}.
-
-
-is_attribute_form(Name) ->
-    fun(Form) -> is_attribute_form(Form, Name) end.
-
-is_attribute_form(Form, Name) ->
-    try
-        erl_syntax:atom_value(erl_syntax:attribute_name(Form)) =:= Name
-    catch error:_ ->
-        false
-    end.
 
 
 measure_time(ExecFn, FormatFn) ->
@@ -141,3 +90,63 @@ measure_time(ExecFn, FormatFn) ->
         FormatFn(MicroSeconds)
     end.
     
+
+%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+%% merge_modules
+%% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+%% @doc Update IM1 with values of IM2.
+-spec merge_modules(IM, IM) -> IM when
+    IM :: #info_module{} | undefined.
+
+merge_modules(undefined, undefined) -> erlang:error(badarg);
+merge_modules(IM, undefined) -> IM;
+merge_modules(undefined, IM) -> IM;
+merge_modules(IM1, IM2) ->
+    Fields = record_info(fields, info_module),
+    Vals1 = record_values(IM1),
+    Vals2 = record_values(IM2),
+    Vals3 = lists:zipwith3(fun merge_module_fields/3, Fields, Vals1, Vals2),
+    list_to_tuple([info_module|Vals3]).
+
+
+-spec merge_module_fields(FieldName, Val, Val) -> Val when
+    FieldName :: atom(),
+    Val :: term().
+
+merge_module_fields(_FieldName, X, undefined) -> X;
+merge_module_fields(_FieldName, undefined, Y) -> Y;
+merge_module_fields(functions, X, Y) -> 
+    %% For each element of the list X, update it with values of the element 
+    %% from Y.
+    lists2:ordkeymerge_with(#info_function.mfa, fun merge_functions/2, X, Y);
+merge_module_fields(_FieldName, _X, Y) -> Y.
+
+
+
+-spec merge_functions(IF, IF) -> IF when
+    IF :: #info_function{} | undefined.
+
+merge_functions(undefined, undefined) -> erlang:error(badarg);
+merge_functions(IF, undefined) -> IF;
+merge_functions(undefined, IF) -> IF;
+merge_functions(IF1, IF2) ->
+    Fields = record_info(fields, info_function),
+    Vals1 = record_values(IF1),
+    Vals2 = record_values(IF2),
+    Vals3 = lists:zipwith3(fun merge_function_fields/3, Fields, Vals1, Vals2),
+    list_to_tuple([info_function|Vals3]).
+
+
+-spec merge_function_fields(FieldName, Val, Val) -> Val when
+    FieldName :: atom(),
+    Val :: term().
+
+merge_function_fields(_FieldName, X, undefined) -> X;
+merge_function_fields(_FieldName, _X, Y) -> Y.
+
+
+record_values(Rec) ->
+    tl(tuple_to_list(Rec)).
+
+

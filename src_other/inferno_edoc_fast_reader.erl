@@ -1,7 +1,7 @@
 %% @doc This module parses edoc info into records.
-%% It is a simplified (and dirty) version of `inferno_edoc_xml_reader'.
+%% It is a simplified (and dirty) version of `inferno_edoc_slow_reader'.
 %% But for most cases it is a good approximation.
--module(inferno_edoc_module_reader).
+-module(inferno_edoc_fast_reader).
 -export([parse_file/1]).
 
 -include_lib("eunit/include/eunit.hrl").

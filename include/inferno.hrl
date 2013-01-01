@@ -3,8 +3,13 @@
         application_name,
         title,
         description,
-        functions = [],
-        compiled_filename
+        compiled_filename,
+        source_filename,
+        refman_filename,
+        parser_mode,
+
+        %% Non-persistent field
+        functions = []
 }).
 
 -record(info_function, {
@@ -15,5 +20,14 @@
         title, 
         description, 
         is_exported = false :: boolean(),
+        %% Line number
         position
 }).
+
+-record(info_application, {
+        name,
+        title,
+        source_directory,
+        compiled_directory
+}).
+
