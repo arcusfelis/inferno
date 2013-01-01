@@ -2,11 +2,22 @@
 %% It is a simplified (and dirty) version of `inferno_edoc_slow_reader'.
 %% But for most cases it is a good approximation.
 -module(inferno_edoc_fast_reader).
--export([parse_file/1]).
+-export([fill/1]).
 
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("inferno/include/inferno.hrl").
 -compile({parse_transform, gin}).
+
+
+fill(InM=#info_module{source_filename = FileName}) ->
+    case parse_file(FileName) of
+        {ok, OutM} ->
+            inferno_lib:merge_modules(InM, OutM);
+        {error, Reason} ->
+            lager:error("Parser error: ~p~n", [Reason]),
+            InM
+    end.
+
 
 parse_file(FileName) ->
     case file:open(FileName, [binary]) of

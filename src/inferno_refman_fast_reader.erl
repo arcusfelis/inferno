@@ -1,7 +1,7 @@
 %% @doc This module parses refman info into records.
 %% It ia a simplified version of `inferno_refman_xml_reader'.
 -module(inferno_refman_fast_reader).
--export([parse_file/1]).
+-export([fill/1]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -12,6 +12,17 @@
 -record(state, {module, op = fun handle_root/3}).
 -record(startElement, {uri, local_name, qualified_name, attributes}).
 -record(endElement, {uri, local_name, qualified_name}).
+
+
+fill(InM=#info_module{refman_filename = FileName}) ->
+    case parse_file(FileName) of
+        {ok, OutM} ->
+            inferno_lib:merge_modules(InM, OutM);
+        {error, Reason} ->
+            lager:error("Parser error: ~p~n", [Reason]),
+            InM
+    end.
+
 
 parse_file(FileName) ->
     try

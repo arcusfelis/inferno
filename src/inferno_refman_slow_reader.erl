@@ -1,6 +1,6 @@
 %% @doc This module parses refman info into records.
 -module(inferno_refman_xml_reader).
--export([parse_file/1]).
+-export([fill/1]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -9,8 +9,19 @@
 -compile({parse_transform, rum}).
 
 
+fill(InM=#info_module{refman_filename = undefined}) -> InM;
+fill(InM=#info_module{refman_filename = FileName}) ->
+    case parse_file(FileName) of
+        {ok, OutM} ->
+            inferno_lib:merge_modules(InM, OutM);
+        {error, Reason} ->
+            lager:error("Parser error: ~p~n", [Reason]),
+            InM
+    end.
+
+
 parse_file(FileName) ->
-    case filename_to_edoc_xml(FileName) of
+    case filename_to_xml(FileName) of
         {ok, XML} ->
             try_handle_module(FileName, XML);
         {error, Reason} ->
@@ -21,8 +32,8 @@ parse_file(FileName) ->
 try_handle_module(FileName, XML) ->
     try
         {ok, handle_module(XML)}
-    error:Reason ->
-        {error, {Reason, Filename, erlang:get_stacktrace()}}
+    catch error:Reason ->
+        {error, {Reason, FileName, erlang:get_stacktrace()}}
     end.
         
 
@@ -180,7 +191,7 @@ filename_test() ->
     F1 = fun() -> {ok, XML} = filename_to_xml(FileName), handle_module(XML) end,
     F2 = fun(MicroSeconds) -> io:format(user, "Parsed for ~p.~n", [MicroSeconds]) end,
     ModRec = inferno_lib:measure_time(F1, F2),
-%   io:format(user, "ModRec: ~p", [ModRec]),
+    io:format(user, "ModRec: ~p", [ModRec]),
     ok.
 
 
