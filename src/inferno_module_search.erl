@@ -48,7 +48,7 @@ source_files(AppDir) ->
         [{ModuleName, FileName} | Acc]
         end,
 
-    RegExp = ".erl$",
+    RegExp = "\.erl$",
     AccIn  = [],
     %% Handle files recursivelly in the directory.
     filelib:fold_files(AppDir, RegExp, true, Fun, AccIn).
@@ -66,7 +66,7 @@ compiled_files(AppDir) ->
         [{ModuleName, FileName} | Acc]
         end,
 
-    RegExp = ".beam$",
+    RegExp = "\.beam$",
     AccIn  = [],
     %% Handle files recursivelly in the directory.
     filelib:fold_files(AppDir, RegExp, true, Fun, AccIn).
@@ -92,7 +92,7 @@ find_doc_files(SrcDocDir) ->
         [{ModuleName, FileName} | Acc]
         end,
 
-    RegExp = ".xml$",
+    RegExp = "\.xml$",
     AccIn  = [],
     %% Handle files recursivelly in the directory.
     filelib:fold_files(SrcDocDir, RegExp, true, Fun, AccIn).
