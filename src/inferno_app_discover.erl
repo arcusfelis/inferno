@@ -1,39 +1,93 @@
--module(imferno_app_discover).
+-module(inferno_app_discover).
 -export([]).
-
-
-%% @doc Return a map from a module name to its source code's location.
--spec files(AppDir) -> [{FileType, FileName}] when
-        AppDir :: filename:dirname(),
-        FileType :: atom(),
-        FileName :: file:filename().
-
-files(AppDir) ->
-    Fun = fun(FileName, Acc) ->
-        Elem = case filename:extension(FileName) of
-                ".beam"    -> {ebin, FileName};
-                ".erl"     -> {erl,  FileName};
-                ".xml"     -> {doc,  FileName};
-                ".app"     -> {app,  FileName};
-                ".src"     -> {app,  FileName}
-        end,
-        [Elem|Acc]
-    end,
-    RegExp = "(\.beam|\.erl|(doc/.*\.xml)|\.app\.src|\.app)$",
-    AccIn  = [],
-    %% Handle files recursivelly in the directory.
-    lists2:group_pairs(filelib:fold_files(AppDir, RegExp, true, Fun, AccIn)).
-
-
-mod_name_to_filename_pair(FileName) ->
-    {list_to_atom(filename:rootname(FileName)), FileName}.
+-include_lib("inferno/include/inferno.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 
 add_application(AppDir) ->
     %% FileType to FileNames proplist.
-    Files   = files(AppDir),
-    Beams   = proplists:get_value(beam, Files, []),
-    Apps    = proplists:get_value(app, Files, []),
-    DocXmls = proplists:get_value(doc, Files, []),
-    Erls    = proplists:get_value(erl, Files, []),
+
+    SFs = lists:keysort(1, source_files(AppDir)),
+    CFs = lists:keysort(1, compiled_files(AppDir)),
+    DFs = lists:keysort(1, doc_files(AppDir)),
+
+    {SFKeys, SFVals} = lists2:rotate(2, SFs),
+    {CFKeys, CFVals} = lists2:rotate(2, CFs),
+    {DFKeys, DFVals} = lists2:rotate(2, DFs),
+
+    ModNames = ordsets:union([SFKeys, CFKeys, DFKeys]),
+
+    SFNames = lists2:align_ordset(SFKeys, SFVals, ModNames),
+    CFNames = lists2:align_ordset(CFKeys, CFVals, ModNames),
+    DFNames = lists2:align_ordset(DFKeys, DFVals, ModNames),
+
+    lists2:zip_with4(fun (ModName, SF, CF, DF) ->
+                #info_module{name = ModName,
+                             source_filename = SF,
+                             compiled_filename = CF,
+                             refman_filename = DF}
+        end, ModNames, SFNames, CFNames, DFNames).
+
+
+%% @doc Return a map from a module name to its source code's location.
+-spec source_files(AppDir) -> [{ModuleName, FileName}] when
+        AppDir :: filename:dirname(),
+        ModuleName :: atom(),
+        FileName :: file:filename().
+
+source_files(AppDir) ->
+    Dir = filename:join([AppDir, src]),
+    Fun = fun(FileName, Acc) ->
+        ModuleName = list_to_atom(filename:basename(FileName, ".erl")),
+        [{ModuleName, FileName} | Acc]
+        end,
+
+    RegExp = "\.erl$",
+    AccIn  = [],
+    %% Handle files recursivelly in the directory.
+    filelib:fold_files(Dir, RegExp, true, Fun, AccIn).
+
+
+%% @doc Return a map from a module name to its compiled file's location.
+-spec compiled_files(AppDir) -> [{ModuleName, FileName}] when
+        AppDir :: filename:dirname(),
+        ModuleName :: atom(),
+        FileName :: file:filename().
+
+compiled_files(AppDir) ->
+    Dir = filename:join([AppDir, ebin]),
+    Fun = fun(FileName, Acc) ->
+        ModuleName = list_to_atom(filename:basename(FileName, ".beam")),
+        [{ModuleName, FileName} | Acc]
+        end,
+
+    RegExp = "\.beam$",
+    AccIn  = [],
+    %% Handle files recursivelly in the directory.
+    filelib:fold_files(Dir, RegExp, true, Fun, AccIn).
+
+
+%% @doc Return a map from a module name to its Module.xml's location.
+-spec doc_files(AppDir) -> [{ModuleName, FileName}] when
+        AppDir :: filename:dirname(),
+        ModuleName :: atom(),
+        FileName :: file:filename().
+
+doc_files(AppDir) ->
+    Dir = filename:join([AppDir, doc, src]),
+    Fun = fun(FileName, Acc) ->
+        ModuleName = list_to_atom(filename:basename(FileName, ".xml")),
+        [{ModuleName, FileName} | Acc]
+        end,
+
+    RegExp = "\.xml$",
+    AccIn  = [],
+    %% Handle files recursivelly in the directory.
+    filelib:fold_files(Dir, RegExp, true, Fun, AccIn).
+
+
+
+add_application_test() ->
+    Res = add_application(code:lib_dir(inferno)),
+    io:format(user, "Res: ~p~n", [Res]),
     ok.

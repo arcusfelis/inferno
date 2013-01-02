@@ -1,9 +1,6 @@
 %% @doc This module parses edoc info into records.
 -module(inferno_lib).
--export([source_files/1,
-         compiled_files/1,
-         doc_files/1,
-         measure_time/2,
+-export([measure_time/2,
          merge_modules/2]).
 
 -include_lib("xmerl/include/xmerl.hrl").
@@ -11,12 +8,6 @@
 -include_lib("inferno/include/inferno.hrl").
 -compile({parse_transform, seqbind}).
 -compile({parse_transform, gin}).
-
-
-
-
-
-
 
 
 

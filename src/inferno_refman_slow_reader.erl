@@ -1,5 +1,5 @@
 %% @doc This module parses refman info into records.
--module(inferno_refman_xml_reader).
+-module(inferno_refman_slow_reader).
 -export([fill/1]).
 
 -include_lib("xmerl/include/xmerl.hrl").
