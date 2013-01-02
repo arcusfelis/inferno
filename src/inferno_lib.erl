@@ -15,66 +15,6 @@
 
 
 
-%% @doc Return a map from a module name to its source code's location.
--spec source_files(AppDir) -> [{ModuleName, FileName}] when
-        AppDir :: filename:dirname(),
-        ModuleName :: atom(),
-        FileName :: file:filename().
-
-source_files(AppDir) ->
-    Fun = fun(FileName, Acc) ->
-        ModuleName = list_to_atom(filename:basename(FileName, ".erl")),
-        [{ModuleName, FileName} | Acc]
-        end,
-
-    RegExp = ".erl$",
-    AccIn  = [],
-    %% Handle files recursivelly in the directory.
-    filelib:fold_files(AppDir, RegExp, true, Fun, AccIn).
-
-
-%% @doc Return a map from a module name to its compiled file's location.
--spec compiled_files(AppDir) -> [{ModuleName, FileName}] when
-        AppDir :: filename:dirname(),
-        ModuleName :: atom(),
-        FileName :: file:filename().
-
-compiled_files(AppDir) ->
-    Fun = fun(FileName, Acc) ->
-        ModuleName = list_to_atom(filename:basename(FileName, ".beam")),
-        [{ModuleName, FileName} | Acc]
-        end,
-
-    RegExp = ".beam$",
-    AccIn  = [],
-    %% Handle files recursivelly in the directory.
-    filelib:fold_files(AppDir, RegExp, true, Fun, AccIn).
-
-
-%% @doc Return a map from a module name to its Module.xml's location.
--spec doc_files(AppDir) -> [{ModuleName, FileName}] when
-        AppDir :: filename:dirname(),
-        ModuleName :: atom(),
-        FileName :: file:filename().
-
-doc_files(AppDir) ->
-    SrcDocDir = filename:join([AppDir, doc, src]),
-    case filelib:is_dir(SrcDocDir) of
-        false -> []; %% There is no directory with data.
-        true -> find_doc_files(SrcDocDir)
-    end.
-
-
-find_doc_files(SrcDocDir) ->
-    Fun = fun(FileName, Acc) ->
-        ModuleName = list_to_atom(filename:basename(FileName, ".xml")),
-        [{ModuleName, FileName} | Acc]
-        end,
-
-    RegExp = ".xml$",
-    AccIn  = [],
-    %% Handle files recursivelly in the directory.
-    filelib:fold_files(SrcDocDir, RegExp, true, Fun, AccIn).
 
 
 

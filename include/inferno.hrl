@@ -6,7 +6,9 @@
         compiled_filename,
         source_filename,
         refman_filename,
-        parser_mode,
+
+        %% Initial mode is fixed.
+        parser_mode = init :: atom(),
 
         %% Non-persistent field
         functions = []
@@ -28,6 +30,7 @@
         name,
         title,
         source_directory,
+        %% optional
         compiled_directory
 }).
 
