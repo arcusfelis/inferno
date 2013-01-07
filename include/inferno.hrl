@@ -26,8 +26,6 @@
 -record(info_application, {
         name,
         title,
-        source_directory,
-        %% optional
-        compiled_directory
+        directories
 }).
 
