@@ -1,15 +1,12 @@
 -record(info_module, {
         name, 
+        analyzed, %% date
         application_name,
         title,
         description,
         compiled_filename,
         source_filename,
         refman_filename,
-
-        %% Initial mode is fixed.
-        parser_mode = init :: atom(),
-
         %% Non-persistent field
         functions = []
 }).

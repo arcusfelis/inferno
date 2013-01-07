@@ -109,7 +109,7 @@ new_name(Chars) ->
 filename_test() ->
     FileName = code:lib_dir(inferno) ++ "/test/data/filename.xml",
     F1 = fun() -> parse_file(FileName) end,
-    F2 = fun(MicroSeconds) -> io:format(user, "Parsed for ~p.~n", [MicroSeconds]) end,
+    F2 = fun(MicroSeconds) -> io:format(user, "~n[refman,fast]Parsed for ~p.~n", [MicroSeconds]) end,
     Res = inferno_lib:measure_time(F1, F2),
     io:format(user, "parse_file/1 returned ~p.~n", [Res]),
     ok.

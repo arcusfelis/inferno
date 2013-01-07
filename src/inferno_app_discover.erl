@@ -63,8 +63,7 @@ compiled_files(AppDir) ->
 
     RegExp = "\.beam$",
     AccIn  = [],
-    %% Handle files recursivelly in the directory.
-    filelib:fold_files(Dir, RegExp, true, Fun, AccIn).
+    filelib:fold_files(Dir, RegExp, false, Fun, AccIn).
 
 
 %% @doc Return a map from a module name to its Module.xml's location.
@@ -82,8 +81,7 @@ doc_files(AppDir) ->
 
     RegExp = "\.xml$",
     AccIn  = [],
-    %% Handle files recursivelly in the directory.
-    filelib:fold_files(Dir, RegExp, true, Fun, AccIn).
+    filelib:fold_files(Dir, RegExp, false, Fun, AccIn).
 
 
 

@@ -189,7 +189,7 @@ filename_test() ->
     FileName = code:lib_dir(inferno) ++ "/test/data/filename.xml",
     io:format(user, "~n", []),
     F1 = fun() -> {ok, XML} = filename_to_xml(FileName), handle_module(XML) end,
-    F2 = fun(MicroSeconds) -> io:format(user, "Parsed for ~p.~n", [MicroSeconds]) end,
+    F2 = fun(MicroSeconds) -> io:format(user, "~n[refman,slow]Parsed for ~p.~n", [MicroSeconds]) end,
     ModRec = inferno_lib:measure_time(F1, F2),
     io:format(user, "ModRec: ~p", [ModRec]),
     ok.

@@ -69,7 +69,7 @@ this_module_test() ->
     F1 = fun() -> 
         parse_file(FileName)
      end,
-    F2 = fun(MicroSeconds) -> io:format(user, "Parsed for ~p.~n", [MicroSeconds]) end,
+    F2 = fun(MicroSeconds) -> io:format(user, "~n[edoc,fast]Parsed for ~p.~n", [MicroSeconds]) end,
     ModRec = inferno_lib:measure_time(F1, F2),
     io:format(user, "ModRec: ~p", [ModRec]),
     ok.

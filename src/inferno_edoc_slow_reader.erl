@@ -157,7 +157,7 @@ this_module_test() ->
     F1 = fun() -> 
         {ok, XML} = filename_to_edoc_xml(FileName), handle_module(XML)
      end,
-    F2 = fun(MicroSeconds) -> io:format(user, "Parsed for ~p.~n", [MicroSeconds]) end,
+    F2 = fun(MicroSeconds) -> io:format(user, "~n[edoc,slow]Parsed for ~p.~n", [MicroSeconds]) end,
     ModRec = inferno_lib:measure_time(F1, F2),
     io:format(user, "ModRec: ~p", [ModRec]),
     ok.
