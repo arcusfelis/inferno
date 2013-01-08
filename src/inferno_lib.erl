@@ -26,7 +26,7 @@ measure_time(ExecFn, FormatFn) ->
 %% merge_modules
 %% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-%% @doc Update IM1 with values of IM2.
+%% @doc Update IM1 with values from IM2.
 -spec merge_modules(IM, IM) -> IM when
     IM :: #info_module{} | undefined.
 

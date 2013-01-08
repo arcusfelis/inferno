@@ -29,3 +29,10 @@
         directories
 }).
 
+
+
+-record(i_counter, {
+        table           :: relatio_type:table_name(),
+        last_id         :: relatio_type:record_id()
+}).
+
