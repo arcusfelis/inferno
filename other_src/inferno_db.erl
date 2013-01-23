@@ -3,6 +3,7 @@
 -export([ lookup/2
         , maybe_lookup/2
         , read/2
+        , index_read/3
         , write/1
         , update_with/3
         , remove/2
@@ -40,6 +41,7 @@ up() ->
             mnesia:create_table(info_module,
                 [{type, ordered_set}
                 ,{disc_copies, [node()]}
+                ,{index, [#info_module.application_name]}
                 ,{attributes, record_info(fields, info_module)}
                 ]),
 
@@ -167,6 +169,15 @@ read(Tab, Id) ->
     {atomic, Result} ->
         Result
     end.
+
+
+index_read(Tab, SecondaryKey, Pos) ->
+    F = fun() -> mnesia:index_read(Tab, SecondaryKey, Pos) end,
+    case mnesia:transaction(F) of
+    {atomic, Result} ->
+        Result
+    end.
+
 
 
 remove(Table, Id) ->

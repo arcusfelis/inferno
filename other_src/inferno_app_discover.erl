@@ -1,32 +1,66 @@
 -module(inferno_app_discover).
--export([]).
+-export([add_application/1]).
 -include_lib("inferno/include/inferno.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -compile({parse_transform, seqbind}).
 
 
-add_application(AppDir) ->
+add_directory(AppDir) ->
     #info_application{name = AppName} = CurrentApp = application(AppDir),
     CurrentMods = application_modules(AppDir),
     SavedApp    = inferno_store:application(AppName),
     SavedMods   = inferno_store:application_modules(AppName),
     %% Merge data from 2 directories.
+    {NewApp, NewMods} =
     merge_application(SavedApp, SavedMods, CurrentApp, CurrentMods),
+    inferno_store:save_list([NewApp|NewMods]),
     ok.
 
 
-remove_application(AppDir) ->
+remove_directory(AppDir) ->
     ok.
+
+
+%% @doc Check for new and updated files. 
+%% This function does not parse module files (because it is too slow).
+%% It only resets `analyzed' field for modules.
+rescan_application(AppName) ->
+    %% TODO: AppCfg can be `undefined', handle this situation.
+    SavedApp = #info_application{app_filename = AppFile, analyzed = AnalTime, 
+                                 directories = Dirs}
+             = inferno_store:application(AppName),
+    NewApp =
+        case filelib:last_modified(AppFile) > AnalTime of
+            true ->
+                %% AppFile was changed after the last reading.
+                {ok, AppCfg} = file:consult(AppFile),
+                fold_app_cfg(AppCfg, SavedApp);
+            false ->
+                SavedApp
+        end,
+    NewApp#info_application{analyzed = erlang:now()},
+
+    %% Join a new pathes with old ones.
+    CurrentMods = multi_application_modules(Dirs),
+    ok.
+%%update_module
 
 
 -spec application(AppDir) -> #info_application{} when
     AppDir :: file:dirname().
 
 application(AppDir) ->
-    AppFile = find_app_file(AppDir),
-    %% TODO: AppCfg can be `undefined', handle this situation.
-    {ok, AppCfg} = file:consult(AppFile),
-    fold_app_cfg(AppCfg, #info_application{directories = [AppDir]}).
+    case find_app_file(AppDir) of
+    {AppName, AppFile} ->
+        %% TODO: AppCfg can be `undefined', handle this situation.
+        {ok, AppCfg} = file:consult(AppFile),
+        fold_app_cfg(AppCfg, #info_application{name = AppName, 
+                                               app_filename = AppFile,
+                                               directories = [AppDir],
+                                               analyzed = erlang:now()});
+    undefined ->
+        error(fixme)
+    end.
 
 
 fold_app_cfg([{application, Name, MetaPL}|T], I) ->
@@ -62,6 +96,15 @@ application_modules(AppDir) ->
                              compiled_filename = CF,
                              refman_filename = DF}
         end, ModNames, SFNames, CFNames, DFNames).
+
+
+%% @doc Run `application_modules/1' for a list of directories.
+multi_application_modules(AppDirs) ->
+    lists:foldr(fun read_application_and_merge/2, [], AppDirs).
+
+read_application_and_merge(AppDir, AccMods) ->
+    Mods = application_modules(AppDir),
+    include_lib:merge_modules(AccMods, Mods).
 
 
 %% @doc Return a map from a module name to its source code's location.
@@ -155,7 +198,8 @@ app_files(AppDir) ->
     filelib:fold_files(Dir, RegExp, false, Fun, AccIn).
 
 
--spec find_app_file(AppDir) -> FileName | undefined when
+-spec find_app_file(AppDir) -> {AppName, FileName} | undefined when
+        AppName :: atom(),
         AppDir :: filename:dirname(),
         FileName :: file:filename().
 
@@ -187,6 +231,8 @@ merge_application(SavedApp, SavedMods, CurrentApp, CurrentMods) ->
     {NewApp, NewMods}.
 
 
+merge_application(undefined, X=#info_application{}) -> X;
+merge_application(X=#info_application{}, undefined) -> X;
 merge_application(#info_application{directories = D1}, 
        CurrentApp=#info_application{directories = D2}) ->
     CurrentApp#info_application{directories = lists2:unique(D2 ++ D1)}.
@@ -271,4 +317,5 @@ fill_module(M@) ->
     M@ = inferno_refman_slow_reader:fill(M@),
     M@ = inferno_pos_reader:fill(M@),
     M@.
+
 

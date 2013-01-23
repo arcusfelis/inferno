@@ -1,6 +1,6 @@
 -record(info_module, {
         name, 
-        analyzed, %% date
+        analyzed, %% date or atom()
         application_name,
         title,
         description,
@@ -8,7 +8,8 @@
         source_filename,
         refman_filename,
         %% Non-persistent field
-        functions = []
+        functions = [],
+        is_analysed = false
 }).
 
 -record(info_function, {
@@ -25,14 +26,11 @@
 
 -record(info_application, {
         name,
+        app_filename,
         title,
-        directories
-}).
-
-
-
--record(i_counter, {
-        table           :: relatio_type:table_name(),
-        last_id         :: relatio_type:record_id()
+        directories,
+        source_pie,
+        compiled_pie,
+        refman_pie
 }).
 
