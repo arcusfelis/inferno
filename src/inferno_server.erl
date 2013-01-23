@@ -61,7 +61,8 @@
         mod_tbl :: ets:tid(),
         app_tbl :: ets:tid(),
         mod_rec_f2p :: dict(),
-        fun_rec_f2p :: dict()
+        fun_rec_f2p :: dict(),
+        app_rec_f2p :: dict()
 }).
 
 
@@ -103,6 +104,7 @@
 -compile({parse_transform, seqbind}).
 -compile({parse_transform, do}).
 -compile({parse_transform, rum}).
+-compile({parse_transform, gin}).
 
 
 %% ------------------------------------------------------------------
@@ -208,7 +210,7 @@ client_error_handler({error, Reason}) ->
 %% ------------------------------------------------------------------
 
 %% @private
-init([DirMon, _Params]) ->
+init([_Params]) ->
     AppTable = ets:new(inferno_application_table, [{keypos, #info_application.name}]),
     ModTbl = ets:new(inferno_module_table, [{keypos, #info_module.name}]),
     FunTbl = ets:new(inferno_function_table, [{keypos, #info_function.mfa}]),
@@ -221,7 +223,8 @@ init([DirMon, _Params]) ->
         mod_tbl = ModTbl,
         app_tbl = AppTable,
         mod_rec_f2p = ModRecF2P,
-        fun_rec_f2p = FunRecF2P
+        fun_rec_f2p = FunRecF2P,
+        app_rec_f2p = AppRecF2P
     },
     {ok, State}.
 
@@ -274,20 +277,10 @@ handle_call(#add_application{name = AppName, directory = AppDir},
                       compiled_pie = CmpPie,
                       refman_pie = ManPie} =
     case ets:lookup(AppTbl, AppName) of
-    [] ->
-    %% Create new application:
-    %% - Create pie-servers.
-    SrcPiei = dirmon_pie:start_link("\\.erl$",  erl_key_maker(AppName)),
-    CmpPiei = dirmon_pie:start_link("\\.beam$", beam_key_maker(AppName)),
-    ManPiei = dirmon_pie:start_link("\\.xml$",  refman_key_maker(AppName)),
-    dirmon_pie:monitor(SrcPiei),
-    dirmon_pie:monitor(CmpPiei),
-    dirmon_pie:monitor(ManPiei),
-    #info_application{source_pie = SrcPiei, 
-                      compiled_pie = CmpPiei,
-                      refman_pie = ManPiei};
-    [Ai] ->
-        Ai
+        [] ->
+            new_application(AppName);
+        [Ai] ->
+            Ai
     end,
     %% Register the directory.
     SrcDir  = filename:join(AppDir, "src"),
@@ -299,7 +292,7 @@ handle_call(#add_application{name = AppName, directory = AppDir},
     dirmon_pie:add_watcher(SrcPie, SrcSrv),
     dirmon_pie:add_watcher(CmpPie, EbinSrv),
     dirmon_pie:add_watcher(ManPie, ManSrv),
-    ets:write(AppTbl, A),
+    ets:insert(AppTbl, A),
     {reply, {ok, ok}, State}.
 
 %% @private
@@ -308,7 +301,11 @@ handle_cast(_Mess, State) ->
 
 
 %% @private
-handle_info(_Mess, State) ->
+handle_info({pie,Ref,Events}, State) ->
+    {noreply, lists:foldl(fun handle_pie_event/2, State, Events)};
+
+handle_info(Mess, State) ->
+    io:format(user, "UNHANDLED MESSAGE: ~p~n", [Mess]),
     {noreply, State}.
 
 
@@ -412,22 +409,93 @@ function_info_test() ->
     ?assertMatch([_, _, _], Info),
     io:format(user, "function_info: ~p", [Info]),
     ok.
-%
-%
-%module_info_test() ->
-%    AppDir = code:lib_dir(inferno),
-%    {ok, S} = ?SRV:start_link([]),
-%    ?SRV:add_application(S, inferno, AppDir),
-%    Info = ?SRV:module_info(S, ?SRV, [description, title]),
-%    ?assertMatch([_, _], Info),
-%    io:format(user, "module_info: ~p", [Info]),
-%    ok.
+
+
+module_info_test() ->
+    AppDir = code:lib_dir(inferno),
+    {ok, S} = ?SRV:start_link([]),
+    ?SRV:add_application(S, inferno, AppDir),
+    Info = ?SRV:module_info(S, ?SRV, [description, title]),
+    ?assertMatch([_, _], Info),
+    io:format(user, "module_info: ~p", [Info]),
+    ok.
 
 erl_key_maker(AppName) ->
-    fun(FileName) -> FileName end.
+    fun(FileName) -> {erl, AppName, filename_to_module_name(FileName)} end.
 
 beam_key_maker(AppName) ->
-    fun(FileName) -> FileName end.
+    fun(FileName) -> {beam, AppName, filename_to_module_name(FileName)} end.
 
 refman_key_maker(AppName) ->
-    fun(FileName) -> FileName end.
+    fun(FileName) -> {refman, AppName, filename_to_module_name(FileName)} end.
+
+filename_to_module_name(FileName) ->
+    list_to_atom(filename:rootname(filename:basename(FileName))).
+
+
+new_application(AppName) ->
+    %% Create new application:
+    %% - Create pie-servers.
+    {ok, SrcPie} = dirmon_pie:start_link("\\.erl$",  erl_key_maker(AppName)),
+    {ok, CmpPie} = dirmon_pie:start_link("\\.beam$", beam_key_maker(AppName)),
+    {ok, ManPie} = dirmon_pie:start_link("\\.xml$",  refman_key_maker(AppName)),
+    dirmon_pie:monitor(SrcPie),
+    dirmon_pie:monitor(CmpPie),
+    dirmon_pie:monitor(ManPie),
+    #info_application{source_pie = SrcPie,
+                      compiled_pie = CmpPie,
+                      refman_pie = ManPie}.
+
+
+handle_pie_event({EventType,{beam,AppName,ModName},FileName}, State
+                 =#state{mod_tbl=ModTbl}) 
+        when in(EventType, [added, modified]) ->
+    M = get_or_create_module(ModTbl, ModName, AppName),
+    ets:insert(ModTbl, M#info_module{compiled_filename=FileName}),
+    State;
+handle_pie_event({deleted,{beam,_AppName,ModName},_FileName}, State
+                 =#state{mod_tbl=ModTbl}) ->
+    ets:update_element(ModTbl, ModName,
+                       {#info_module.compiled_filename, undefined}),
+    State;
+
+handle_pie_event({EventType,{erl,AppName,ModName},FileName}, State
+                 =#state{mod_tbl=ModTbl, fun_tbl=FunTbl}) 
+        when in(EventType, [added, modified]) ->
+    M@ = get_or_create_module(ModTbl, ModName, AppName),
+    M@ = M@#info_module{source_filename=FileName, is_analysed=false},
+    clear_functions(ModName, FunTbl),
+    ets:insert(ModTbl, M@),
+    State;
+handle_pie_event({deleted,{erl,_AppName,ModName},_FileName}, State
+                 =#state{mod_tbl=ModTbl}) ->
+    ets:update_element(ModTbl, ModName,
+                       {#info_module.source_filename, undefined}),
+    State;
+
+handle_pie_event({EventType,{refman,AppName,ModName},FileName}, State
+                 =#state{mod_tbl=ModTbl, fun_tbl=FunTbl})
+        when in(EventType, [added, modified]) ->
+    M@ = get_or_create_module(ModTbl, ModName, AppName),
+    M@ = M@#info_module{refman_filename=FileName, is_analysed=false},
+    clear_functions(ModName, FunTbl),
+    ets:insert(ModTbl, M@),
+    State;
+handle_pie_event({deleted,{refman,_AppName,ModName},_FileName}, State
+                 =#state{mod_tbl=ModTbl}) ->
+    ets:update_element(ModTbl, ModName,
+                       {#info_module.refman_filename, undefined}),
+    State.
+
+
+
+get_or_create_module(ModTbl, ModName, AppName) ->
+    case ets:lookup(ModTbl, ModName) of
+        []  -> #info_module{name=ModName, application_name=AppName};
+        [M] -> M
+    end.
+
+
+
+clear_functions(ModName, FunTbl) ->
+    ets:match_delete(FunTbl, #info_function{_='_', module_name=ModName}).
