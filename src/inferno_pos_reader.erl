@@ -16,7 +16,7 @@ fill(InM=#info_module{source_filename = FileName}, Cache) ->
         _Other ->
             case filename_to_function_positions(FileName) of
                 {ok, Fun2Pos} ->
-                    inferno_cache:put(Cache, Key, FileName, Fun2Pos),
+                    inferno_cache:put(Cache, Key, FileName, {Hash, Fun2Pos}),
                     OutM = set_positions(InM, Fun2Pos),
                     inferno_lib:merge_modules(InM, OutM);
                 {error, Reason} ->

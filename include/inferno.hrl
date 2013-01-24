@@ -28,7 +28,7 @@
         name,
         app_filename,
         title,
-        directories,
+        directories = [],
         source_pie,
         compiled_pie,
         refman_pie

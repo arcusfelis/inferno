@@ -22,7 +22,7 @@ fill(InM=#info_module{refman_filename = FileName}, Cache) ->
         _Other ->
             case parse_file(FileName) of
                 {ok, OutM} ->
-                    inferno_cache:put(Cache, Key, FileName, OutM),
+                    inferno_cache:put(Cache, Key, FileName, {Hash, OutM}),
                     inferno_lib:merge_modules(InM, OutM);
                 {error, Reason} ->
                     lager:error("Parser error: ~p~n", [Reason]),

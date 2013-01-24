@@ -15,13 +15,14 @@ fill(InM=#info_module{source_filename = FileName}, Cache) ->
     Key = {edoc, FileName},
     case inferno_cache:get(Cache, Key) of
         {Hash, OutM} ->
+            io:format(user, "Use cached value for ~p.~n", [Key]),
             inferno_lib:merge_modules(InM, OutM);
 
         %% undefined or {_OtherHash, _OtherFun2Pos}
         _Other ->
             case parse_file(FileName) of
                 {ok, OutM} ->
-                    inferno_cache:put(Cache, Key, FileName, OutM),
+                    inferno_cache:put(Cache, Key, FileName, {Hash, OutM}),
                     inferno_lib:merge_modules(InM, OutM);
                 {error, Reason} ->
                     lager:error("Parser error: ~p~n", [Reason]),

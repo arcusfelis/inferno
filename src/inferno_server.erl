@@ -14,7 +14,8 @@
          function_info/3,
          add_application/3,
          module_names_to_compiled_filenames/2,
-         application_names_to_directories/2]).
+         application_names_to_directories/2,
+         save/1]).
 
 
 %% ------------------------------------------------------------------
@@ -188,6 +189,8 @@ application_names_to_directories(Server, AppNames) ->
 add_application(Server, AppName, AppDir) ->
     call(Server, #add_application{name = AppName, directory = AppDir}).
 
+save(Server) ->
+    gen_server:cast(Server, save).
  
 %% ------------------------------------------------------------------
 %% gen_server Client Helpers
@@ -296,7 +299,7 @@ handle_call(#add_application{name = AppName, directory = AppDir},
     dirmon_pie:add_watcher(SrcPie, SrcSrv),
     dirmon_pie:add_watcher(CmpPie, EbinSrv),
     dirmon_pie:add_watcher(ManPie, ManSrv),
-    ets:insert(AppTbl, A),
+    ets:insert(AppTbl, A#info_application{directories = [AppDir|old()]}),
     {reply, {ok, ok}, State}.
 
 %% @private
@@ -446,7 +449,8 @@ new_application(AppName) ->
     dirmon_pie:monitor(SrcPie),
     dirmon_pie:monitor(CmpPie),
     dirmon_pie:monitor(ManPie),
-    #info_application{source_pie = SrcPie,
+    #info_application{name = AppName,
+                      source_pie = SrcPie,
                       compiled_pie = CmpPie,
                       refman_pie = ManPie}.
 

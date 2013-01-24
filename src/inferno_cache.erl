@@ -2,7 +2,8 @@
 -export([start_link/1,
          get/2,
          put/4,
-         purge/2]).
+         purge/2,
+         save/1]).
 
 -export([init/1, 
          handle_call/3, 
@@ -19,7 +20,7 @@
 %% ------------------------------------------------------------------
 
 start_link(FileName) ->
-    gen_server:start_link(FileName).
+    gen_server:start_link(?MODULE, [FileName], []).
 
 get(Server, Key) ->
     gen_server:call(Server, {get, Key}).
@@ -29,6 +30,9 @@ put(Server, Key, SecKey, Value) ->
 
 purge(Server, SecKey) ->
     gen_server:cast(Server, {purge, SecKey}).
+
+save(Server) ->
+    gen_server:cast(Server, save).
 
 %% ------------------------------------------------------------------
 %% Handlers
@@ -48,6 +52,9 @@ handle_cast({put, Key, SecKey, Value}, State=#cache_state{table=Table}) ->
     {noreply, State};
 handle_cast({purge, SecKey}, State=#cache_state{table=Table}) ->
     dets:match_delete(Table, #cache_entry{_='_', seckey=SecKey}),
+    {noreply, State};
+handle_cast(save, State=#cache_state{table=Table}) ->
+    dets:sync(Table),
     {noreply, State}.
 
 handle_info(_Mess, State) ->
