@@ -1,16 +1,28 @@
 -module(inferno_pos_reader).
--export([fill/1]).
+-export([fill/2]).
 -include_lib("inferno/include/inferno.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-fill(InM=#info_module{source_filename = FileName}) ->
-    case filename_to_function_positions(FileName) of
-        {ok, Fun2Pos} ->
+fill(InM=#info_module{source_filename = FileName}, Cache) ->
+    Hash = [inferno_lib:file_hash(FileName),
+            inferno_lib:module_ast_hash(?MODULE)],
+    Key = {pos, FileName},
+    case inferno_cache:get(Cache, Key) of
+        {Hash, Fun2Pos} ->
             OutM = set_positions(InM, Fun2Pos),
             inferno_lib:merge_modules(InM, OutM);
-        {error, Reason} ->
-            lager:error("Parser error: ~p~n", [Reason]),
-            InM
+
+        %% undefined or {_OtherHash, _OtherFun2Pos}
+        _Other ->
+            case filename_to_function_positions(FileName) of
+                {ok, Fun2Pos} ->
+                    inferno_cache:put(Cache, Key, FileName, Fun2Pos),
+                    OutM = set_positions(InM, Fun2Pos),
+                    inferno_lib:merge_modules(InM, OutM);
+                {error, Reason} ->
+                    lager:error("Parser error: ~p~n", [Reason]),
+                    InM
+            end
     end.
 
 %% ------------------------------------------------------------------

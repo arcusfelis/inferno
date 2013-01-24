@@ -62,7 +62,8 @@
         app_tbl :: ets:tid(),
         mod_rec_f2p :: dict(),
         fun_rec_f2p :: dict(),
-        app_rec_f2p :: dict()
+        app_rec_f2p :: dict(),
+        cache :: inferno_cache:server()
 }).
 
 
@@ -210,7 +211,7 @@ client_error_handler({error, Reason}) ->
 %% ------------------------------------------------------------------
 
 %% @private
-init([_Params]) ->
+init([Params]) ->
     AppTable = ets:new(inferno_application_table, [{keypos, #info_application.name}]),
     ModTbl = ets:new(inferno_module_table, [{keypos, #info_module.name}]),
     FunTbl = ets:new(inferno_function_table, [{keypos, #info_function.mfa}]),
@@ -218,13 +219,16 @@ init([_Params]) ->
     AppRecF2P = fields_to_position_dict(record_info(fields, info_application)),
     ModRecF2P = fields_to_position_dict(record_info(fields, info_module)),
     FunRecF2P = fields_to_position_dict(record_info(fields, info_function)),
+    CacheFileName = proplists:get_value(cache_file, Params, "cache.dets"),
+    {ok, Cache} = inferno_cache:start_link(CacheFileName),
     State = #state{
         fun_tbl = FunTbl,
         mod_tbl = ModTbl,
         app_tbl = AppTable,
         mod_rec_f2p = ModRecF2P,
         fun_rec_f2p = FunRecF2P,
-        app_rec_f2p = AppRecF2P
+        app_rec_f2p = AppRecF2P,
+        cache = Cache
     },
     {ok, State}.
 
@@ -331,17 +335,17 @@ code_change(_OldVsn, State, _Extra) ->
 %% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 check_module(ModuleName, State) ->
-    #state{mod_tbl = ModTbl, fun_tbl = FunTbl} = State,
+    #state{mod_tbl = ModTbl, fun_tbl = FunTbl, cache = Cache} = State,
     case ets:lookup(ModTbl, ModuleName) of
         [M=#info_module{is_analysed = true}] ->
             {ok, M};
         [M@=#info_module{is_analysed = false}] ->
             M@ = M@#info_module{functions = []},
-            M@ = inferno_edoc_slow_reader:fill(M@),  
-            M@ = inferno_refman_slow_reader:fill(M@),
+            M@ = inferno_edoc_slow_reader:fill(M@, Cache),
+            M@ = inferno_refman_slow_reader:fill(M@, Cache),
             #info_module{functions = Funs} =
-            M@ = inferno_pos_reader:fill(M@),
-            M@ = M@#info_module{functions = []},
+            M@ = inferno_pos_reader:fill(M@, Cache),
+            M@ = M@#info_module{functions = [], is_analysed=true},
             ets:insert(ModTbl, M@),
             ets:insert(FunTbl, Funs),
             {ok, M@};
@@ -474,7 +478,7 @@ handle_pie_event({deleted,{erl,_AppName,ModName},_FileName}, State
     State;
 
 handle_pie_event({EventType,{refman,AppName,ModName},FileName}, State
-                 =#state{mod_tbl=ModTbl, fun_tbl=FunTbl})
+                 =#state{mod_tbl=ModTbl, fun_tbl=FunTbl, cache=Cache})
         when in(EventType, [added, modified]) ->
     M@ = get_or_create_module(ModTbl, ModName, AppName),
     M@ = M@#info_module{refman_filename=FileName, is_analysed=false},

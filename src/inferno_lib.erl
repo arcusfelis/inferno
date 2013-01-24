@@ -1,14 +1,15 @@
 %% @doc This module parses edoc info into records.
 -module(inferno_lib).
 -export([measure_time/2,
-         merge_modules/2]).
+         merge_modules/2,
+         module_ast_hash/1,
+         file_hash/1]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("inferno/include/inferno.hrl").
 -compile({parse_transform, seqbind}).
 -compile({parse_transform, gin}).
-
 
 
 measure_time(ExecFn, FormatFn) ->
@@ -20,7 +21,16 @@ measure_time(ExecFn, FormatFn) ->
         MicroSeconds = timer:now_diff(Stop, Start),
         FormatFn(MicroSeconds)
     end.
-    
+
+
+module_ast_hash(Mod) ->
+    Attrs = Mod:module_info(attributes),
+    [Hash] = proplists:get_value(vsn, Attrs),
+    Hash.
+
+file_hash(FileName) ->
+    filelib:last_modified(FileName).
+
 
 %% ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 %% merge_modules

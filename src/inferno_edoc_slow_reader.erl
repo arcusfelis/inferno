@@ -1,6 +1,6 @@
 %% @doc This module parses edoc info into records.
 -module(inferno_edoc_slow_reader).
--export([fill/1]).
+-export([fill/2]).
 
 -include_lib("xmerl/include/xmerl.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -9,13 +9,24 @@
 -compile({parse_transform, rum}).
 
 
-fill(InM=#info_module{source_filename = FileName}) ->
-    case parse_file(FileName) of
-        {ok, OutM} ->
+fill(InM=#info_module{source_filename = FileName}, Cache) ->
+    Hash = [inferno_lib:file_hash(FileName),
+            inferno_lib:module_ast_hash(?MODULE)],
+    Key = {edoc, FileName},
+    case inferno_cache:get(Cache, Key) of
+        {Hash, OutM} ->
             inferno_lib:merge_modules(InM, OutM);
-        {error, Reason} ->
-            lager:error("Parser error: ~p~n", [Reason]),
-            InM
+
+        %% undefined or {_OtherHash, _OtherFun2Pos}
+        _Other ->
+            case parse_file(FileName) of
+                {ok, OutM} ->
+                    inferno_cache:put(Cache, Key, FileName, OutM),
+                    inferno_lib:merge_modules(InM, OutM);
+                {error, Reason} ->
+                    lager:error("Parser error: ~p~n", [Reason]),
+                    InM
+            end
     end.
 
 
