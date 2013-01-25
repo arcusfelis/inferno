@@ -16,6 +16,7 @@
          add_application/3,
          module_names_to_compiled_filenames/2,
          application_names_to_directories/2,
+         application_directories/1,
          save/1]).
 
 
@@ -182,9 +183,9 @@ module_names_to_compiled_filenames(Server, ModuleNames) ->
 -spec application_names_to_directories(Server, AppNames) -> A2D when
     Server :: x_server(),
     AppNames :: [AppName],
-    A2D :: [{AppName, MaybeDirName}],
+    A2D :: [{AppName, [DirName]}],
     AppName :: atom(),
-    MaybeDirName :: filename:dirname() | undefined. 
+    DirName :: filename:dirname().
 
 application_names_to_directories(_Server, []) ->
     [];
@@ -192,10 +193,21 @@ application_names_to_directories(Server, AppNames) ->
     call(Server, #application_names_to_directories{app_names = AppNames}).
 
 
+-spec application_directories(Server) -> A2D when
+    Server :: x_server(),
+    A2D :: [{AppName, [DirName]}],
+    AppName :: atom(),
+    DirName :: filename:dirname().
+
+application_directories(Server) ->
+    call(Server, application_directories).
+
+
 -spec add_application(x_server(), atom(), filename:directory()) -> ok.
 
 add_application(Server, AppName, AppDir) ->
     call(Server, #add_application{name = AppName, directory = AppDir}).
+
 
 save(Server) ->
     gen_server:cast(Server, save).
@@ -296,6 +308,14 @@ handle_call(#application_names_to_directories{app_names = AppNames},
             || AppName <- AppNames],
     {reply, {ok, Reply}, State};
 
+handle_call(application_directories,
+            _From, State=#state{app_tbl = AppTbl}) ->
+    Iter = fun(#info_application{name=Name, directories=Dirs}, Acc) ->
+            [{Name, Dirs}|Acc]
+           end,
+    Dirs = ets:foldl(Iter, [], AppTbl),
+    {reply, {ok, Dirs}, State};
+
 handle_call(#add_application{name = AppName, directory = AppDir},
             _From, State=#state{app_tbl = AppTbl}) ->
     %% Select the application with AppName from AppTbl (or create new app).
@@ -321,7 +341,7 @@ handle_call(#add_application{name = AppName, directory = AppDir},
     dirmon_pie:add_watcher(CmpPie, EbinSrv),
     dirmon_pie:add_watcher(AppPie, EbinSrv),
     dirmon_pie:add_watcher(ManPie, ManSrv),
-    ets:insert(AppTbl, A#info_application{directories = [AppDir|old()]}),
+    ets:insert(AppTbl, A#info_application{directories = old() ++ [AppDir]}),
     {reply, {ok, ok}, State}.
 
 %% @private

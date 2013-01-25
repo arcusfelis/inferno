@@ -15,7 +15,7 @@ fill(InM=#info_module{source_filename = FileName}, Cache) ->
     Key = {edoc, FileName},
     case inferno_cache:get(Cache, Key) of
         {Hash, OutM} ->
-            io:format(user, "Use cached value for ~p.~n", [Key]),
+            io:format(user, "Used the cached value for ~p.~n", [Key]),
             inferno_lib:merge_modules(InM, OutM);
 
         %% undefined or {_OtherHash, _OtherFun2Pos}
