@@ -26,11 +26,11 @@
 
 -record(info_application, {
         name,
-        app_filename,
         title,
         directories = [],
         source_pie,
         compiled_pie,
-        refman_pie
+        refman_pie,
+        app_pie
 }).
 

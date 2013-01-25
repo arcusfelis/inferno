@@ -12,6 +12,7 @@
          start/1,
          module_info/3,
          function_info/3,
+         application_info/3,
          add_application/3,
          module_names_to_compiled_filenames/2,
          application_names_to_directories/2,
@@ -70,6 +71,11 @@
 
 -record(function_info, {
         mfa,
+        fields
+}).
+
+-record(app_info, {
+        app_name,
         fields
 }).
 
@@ -155,6 +161,8 @@ function_info(Server, MFA, Fields) ->
 module_info(Server, ModuleName, Fields) ->
     call(Server, #module_info{module_name = ModuleName, fields = Fields}).
 
+application_info(Server, AppName, Fields) ->
+    call(Server, #app_info{app_name = AppName, fields = Fields}).
 
 %% @doc Returns filenames of modules. 
 %% `MaybeFilename' is undefined, when the module is not found.
@@ -262,6 +270,18 @@ handle_call(#module_info{module_name = ModuleName, fields = FieldNames},
        ]),
     {reply, Reply, State};
 
+handle_call(#app_info{app_name = AppName, fields = FieldNames},
+            _From, State) ->
+    Reply = 
+    do([error_m || 
+        Info <- lookup_fields(State#state.app_tbl,      %% table
+                              AppName,                  %% key
+                              FieldNames,               %% atoms
+                              State#state.app_rec_f2p), %% meta info
+        return(Info)
+       ]),
+    {reply, Reply, State};
+
 handle_call(#module_names_to_compiled_filenames{module_names = ModuleNames},
             _From, State=#state{mod_tbl = ModTbl}) ->
     Reply = [{ModuleName, maybe_lookup_element(ModTbl, ModuleName, 
@@ -282,6 +302,7 @@ handle_call(#add_application{name = AppName, directory = AppDir},
     A = 
     #info_application{source_pie = SrcPie, 
                       compiled_pie = CmpPie,
+                      app_pie = AppPie,
                       refman_pie = ManPie} =
     case ets:lookup(AppTbl, AppName) of
         [] ->
@@ -298,6 +319,7 @@ handle_call(#add_application{name = AppName, directory = AppDir},
     {ok, ManSrv}  = dirmon_watcher:start_link(ManDir),
     dirmon_pie:add_watcher(SrcPie, SrcSrv),
     dirmon_pie:add_watcher(CmpPie, EbinSrv),
+    dirmon_pie:add_watcher(AppPie, EbinSrv),
     dirmon_pie:add_watcher(ManPie, ManSrv),
     ets:insert(AppTbl, A#info_application{directories = [AppDir|old()]}),
     {reply, {ok, ok}, State}.
@@ -308,7 +330,7 @@ handle_cast(_Mess, State) ->
 
 
 %% @private
-handle_info({pie,Ref,Events}, State) ->
+handle_info({pie,_Ref,Events}, State) ->
     {noreply, lists:foldl(fun handle_pie_event/2, State, Events)};
 
 handle_info(Mess, State) ->
@@ -436,6 +458,9 @@ beam_key_maker(AppName) ->
 refman_key_maker(AppName) ->
     fun(FileName) -> {refman, AppName, filename_to_module_name(FileName)} end.
 
+app_key_maker(AppName) ->
+    fun(FileName) -> {app, AppName, filename_to_module_name(FileName)} end.
+
 filename_to_module_name(FileName) ->
     list_to_atom(filename:rootname(filename:basename(FileName))).
 
@@ -446,13 +471,16 @@ new_application(AppName) ->
     {ok, SrcPie} = dirmon_pie:start_link("\\.erl$",  erl_key_maker(AppName)),
     {ok, CmpPie} = dirmon_pie:start_link("\\.beam$", beam_key_maker(AppName)),
     {ok, ManPie} = dirmon_pie:start_link("\\.xml$",  refman_key_maker(AppName)),
+    {ok, AppPie} = dirmon_pie:start_link("\\.app$",  app_key_maker(AppName)),
     dirmon_pie:monitor(SrcPie),
     dirmon_pie:monitor(CmpPie),
     dirmon_pie:monitor(ManPie),
+    dirmon_pie:monitor(AppPie),
     #info_application{name = AppName,
                       source_pie = SrcPie,
                       compiled_pie = CmpPie,
-                      refman_pie = ManPie}.
+                      refman_pie = ManPie,
+                      app_pie = AppPie}.
 
 
 handle_pie_event({EventType,{beam,AppName,ModName},FileName}, State
@@ -482,7 +510,7 @@ handle_pie_event({deleted,{erl,_AppName,ModName},_FileName}, State
     State;
 
 handle_pie_event({EventType,{refman,AppName,ModName},FileName}, State
-                 =#state{mod_tbl=ModTbl, fun_tbl=FunTbl, cache=Cache})
+                 =#state{mod_tbl=ModTbl, fun_tbl=FunTbl})
         when in(EventType, [added, modified]) ->
     M@ = get_or_create_module(ModTbl, ModName, AppName),
     M@ = M@#info_module{refman_filename=FileName, is_analysed=false},
@@ -493,6 +521,20 @@ handle_pie_event({deleted,{refman,_AppName,ModName},_FileName}, State
                  =#state{mod_tbl=ModTbl}) ->
     ets:update_element(ModTbl, ModName,
                        {#info_module.refman_filename, undefined}),
+    State;
+
+handle_pie_event({EventType,{app,AppName,AppName},FileName}, State
+                 =#state{app_tbl=AppTbl})
+        when in(EventType, [added, modified]) ->
+    {ok, AppCfg} = file:consult(FileName),
+    [A@] = ets:lookup(AppTbl, AppName),
+    A@ = fold_app_cfg(AppCfg, A@),
+    ets:insert(AppTbl, A@),
+    State;
+handle_pie_event({deleted,{app,AppName,AppName},_FileName}, State
+                 =#state{app_tbl=AppTbl}) ->
+    ets:update_element(AppTbl, AppName,
+                       {#info_application.title, undefined}),
     State.
 
 
@@ -507,3 +549,16 @@ get_or_create_module(ModTbl, ModName, AppName) ->
 
 clear_functions(ModName, FunTbl) ->
     ets:match_delete(FunTbl, #info_function{_='_', module_name=ModName}).
+
+
+%% @doc Analyse app-file.
+fold_app_cfg([{application, Name, MetaPL}|T], I) ->
+    Title = proplists:get_value(description, MetaPL, ""),
+    I2 = I#info_application{name = Name, title = Title},
+    fold_app_cfg(T, I2);
+fold_app_cfg([_|T], I) ->
+    fold_app_cfg(T, I);
+fold_app_cfg([], I) ->
+    I.
+
+
