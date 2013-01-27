@@ -9,7 +9,9 @@
         refman_filename,
         %% Non-persistent field
         functions = [],
-        is_analysed = false
+        %% If is_analysed=false, then only filenames are declared.
+        is_analysed = false,
+        behaviours = [] :: [atom()]
 }).
 
 -record(info_function, {
