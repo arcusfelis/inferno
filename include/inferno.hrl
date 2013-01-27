@@ -23,7 +23,8 @@
         description, 
         is_exported = false :: boolean(),
         %% Line number
-        position
+        position,
+        behaviours = [] :: [atom()]
 }).
 
 -record(info_application, {

@@ -116,7 +116,7 @@ find_behaviour_attr(Form) ->
 
 inferno_server_attr_reading_test() ->
     FileName = code:lib_dir(inferno) ++ "/src/inferno_server.erl",
-    M = fill_from_source(#info_module{source_filename=FileName}, ok),
+    M = fill_from_source(#info_module{source_filename=FileName}, undefined),
     ?assertEqual(M#info_module.behaviours, [gen_server]),
     ok.
 
