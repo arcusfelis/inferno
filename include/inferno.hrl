@@ -30,10 +30,5 @@
 -record(info_application, {
         name,
         title,
-        directories = [],
-        source_pie,
-        compiled_pie,
-        refman_pie,
-        app_pie
+        directories = []
 }).
-

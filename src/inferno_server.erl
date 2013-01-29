@@ -14,6 +14,7 @@
          function_info/3,
          application_info/3,
          add_application/3,
+         remove_application/3,
          module_names_to_compiled_filenames/2,
          application_names_to_directories/2,
          application_directories/1,
@@ -66,7 +67,8 @@
         mod_rec_f2p :: dict(),
         fun_rec_f2p :: dict(),
         app_rec_f2p :: dict(),
-        cache :: inferno_cache:server()
+        cache :: inferno_cache:server(),
+        dispatcher :: pid() %% gen_event
 }).
 
 
@@ -94,6 +96,11 @@
 }).
 
 -record(add_application, {
+        name,
+        directory
+}).
+
+-record(remove_application, {
         name,
         directory
 }).
@@ -209,6 +216,12 @@ add_application(Server, AppName, AppDir) ->
     call(Server, #add_application{name = AppName, directory = AppDir}).
 
 
+-spec remove_application(x_server(), atom(), filename:directory()) -> ok.
+
+remove_application(Server, AppName, AppDir) ->
+    call(Server, #remove_application{name = AppName, directory = AppDir}).
+
+
 save(Server) ->
     gen_server:cast(Server, save).
  
@@ -243,6 +256,8 @@ init([Params]) ->
     ModRecF2P = fields_to_position_dict(record_info(fields, info_module)),
     FunRecF2P = fields_to_position_dict(record_info(fields, info_function)),
     CacheFileName = proplists:get_value(cache_file, Params, "cache.dets"),
+    {ok, Dispatcher} = gen_event:start_link(),
+    ok = gen_event:add_handler(Dispatcher, inferno_pie_handler, self()),
     {ok, Cache} = inferno_cache:start_link(CacheFileName),
     State = #state{
         fun_tbl = FunTbl,
@@ -251,7 +266,8 @@ init([Params]) ->
         mod_rec_f2p = ModRecF2P,
         fun_rec_f2p = FunRecF2P,
         app_rec_f2p = AppRecF2P,
-        cache = Cache
+        cache = Cache,
+        dispatcher = Dispatcher
     },
     {ok, State}.
 
@@ -317,32 +333,54 @@ handle_call(application_directories,
     {reply, {ok, Dirs}, State};
 
 handle_call(#add_application{name = AppName, directory = AppDir},
-            _From, State=#state{app_tbl = AppTbl}) ->
+            _From, State=#state{app_tbl = AppTbl, dispatcher = Dispatcher}) ->
     %% Select the application with AppName from AppTbl (or create new app).
     A = 
-    #info_application{source_pie = SrcPie, 
-                      compiled_pie = CmpPie,
-                      app_pie = AppPie,
-                      refman_pie = ManPie} =
     case ets:lookup(AppTbl, AppName) of
         [] ->
+            inferno_event:add_application(Dispatcher, AppName, AppDir),
             new_application(AppName);
         [Ai] ->
             Ai
     end,
-    %% Register the directory.
-    SrcDir  = filename:join(AppDir, "src"),
-    EbinDir = filename:join(AppDir, "ebin"),
-    ManDir  = filename:join([AppDir, "doc", "src"]),
-    {ok, SrcSrv}  = dirmon_watcher:start_link(SrcDir),
-    {ok, EbinSrv} = dirmon_watcher:start_link(EbinDir),
-    {ok, ManSrv}  = dirmon_watcher:start_link(ManDir),
-    dirmon_pie:add_watcher(SrcPie, SrcSrv),
-    dirmon_pie:add_watcher(CmpPie, EbinSrv),
-    dirmon_pie:add_watcher(AppPie, EbinSrv),
-    dirmon_pie:add_watcher(ManPie, ManSrv),
     ets:insert(AppTbl, A#info_application{directories = old() ++ [AppDir]}),
-    {reply, {ok, ok}, State}.
+    inferno_event:add_application_directory(Dispatcher, AppName, AppDir),
+    {reply, {ok, ok}, State};
+
+handle_call(#remove_application{name = AppName, directory = AppDir},
+            _From, State=#state{app_tbl = AppTbl, dispatcher = Dispatcher}) ->
+    case ets:lookup(AppTbl, AppName) of
+    [] -> {reply, {error, no_such_app}, State}; %% Bad application
+        
+    [A=#info_application{directories=Ds}] ->
+       case lists:member(AppDir, Ds) of
+        false -> {reply, {error, no_such_dir}, State}; %% Bad directory
+        true ->
+            %% sending events
+            inferno_event:
+            remove_application_directory(Dispatcher, AppName, AppDir),
+            case Ds of
+                [AppDir, NewDir|_Ds1] ->
+                    inferno_event:
+                    update_application(Dispatcher, AppName, AppDir, NewDir);
+                [AppDir] ->
+                    inferno_event:
+                    delete_application(Dispatcher, AppName);
+                _ ->
+                    ok
+            end,
+            %% change state
+            Ds1 = lists:delete(AppDir, Ds),
+            case Ds1 of
+                [] ->
+                    ets:delete(AppTbl, AppName);
+                [_|_] ->
+                    ets:insert(AppTbl, A#info_application{directories = Ds1})
+            end,
+            {reply, {ok, ok}, State}
+        end
+    end.
+
 
 %% @private
 handle_cast(_Mess, State) ->
@@ -471,38 +509,9 @@ module_info_test() ->
     io:format(user, "module_info: ~p", [Info]),
     ok.
 
-erl_key_maker(AppName) ->
-    fun(FileName) -> {erl, AppName, filename_to_module_name(FileName)} end.
-
-beam_key_maker(AppName) ->
-    fun(FileName) -> {beam, AppName, filename_to_module_name(FileName)} end.
-
-refman_key_maker(AppName) ->
-    fun(FileName) -> {refman, AppName, filename_to_module_name(FileName)} end.
-
-app_key_maker(AppName) ->
-    fun(FileName) -> {app, AppName, filename_to_module_name(FileName)} end.
-
-filename_to_module_name(FileName) ->
-    list_to_atom(filename:rootname(filename:basename(FileName))).
-
 
 new_application(AppName) ->
-    %% Create new application:
-    %% - Create pie-servers.
-    {ok, SrcPie} = dirmon_pie:start_link("\\.erl$",  erl_key_maker(AppName)),
-    {ok, CmpPie} = dirmon_pie:start_link("\\.beam$", beam_key_maker(AppName)),
-    {ok, ManPie} = dirmon_pie:start_link("\\.xml$",  refman_key_maker(AppName)),
-    {ok, AppPie} = dirmon_pie:start_link("\\.app$",  app_key_maker(AppName)),
-    dirmon_pie:monitor(SrcPie),
-    dirmon_pie:monitor(CmpPie),
-    dirmon_pie:monitor(ManPie),
-    dirmon_pie:monitor(AppPie),
-    #info_application{name = AppName,
-                      source_pie = SrcPie,
-                      compiled_pie = CmpPie,
-                      refman_pie = ManPie,
-                      app_pie = AppPie}.
+    #info_application{name = AppName}.
 
 
 handle_pie_event({EventType,{beam,AppName,ModName},FileName}, State
