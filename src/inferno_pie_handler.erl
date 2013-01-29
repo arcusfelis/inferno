@@ -6,14 +6,14 @@
 -record(state, {server, main_sup}).
 
 init(Server) ->
-    {ok, Sup} = inferno_main_pie_sup:start_link(Server),
-    State = #state{server=Server, main_sup=Sup},
+    {ok, MainSup} = inferno_main_pie_sup:start_link(Server),
+    State = #state{server=Server, main_sup=MainSup},
     {ok, State}.
 
 
-handle_event({add_application, AppName},
+handle_event({add_application, AppName, _AppDir},
              State=#state{main_sup=MainSup}) ->
-    {ok, Sup} = supervisor:add_application(MainSup),
+    {ok, Sup} = inferno_main_pie_sup:add_application(MainSup, AppName),
     %% Create new application:
     %% - Create pie-servers.
     {ok, _SrcPie} = 
@@ -31,18 +31,22 @@ handle_event({add_application, AppName},
     {ok, State};
 
 handle_event({add_application_directory, AppName, AppDir},
-             State=#state{server=Server, sup=Sup}) ->
+             State=#state{main_sup=MainSup}) ->
+    {ok, Sup} = inferno_main_pie_sup:
+                get_application_supervisor(MainSup, AppName),
     %% Register the directory.
     SrcDir  = filename:join(AppDir, "src"),
     EbinDir = filename:join(AppDir, "ebin"),
     ManDir  = filename:join([AppDir, "doc", "src"]),
-    {ok, SrcSrv}  = dirmon_watcher:start_link(SrcDir),
-    {ok, EbinSrv} = dirmon_watcher:start_link(EbinDir),
-    {ok, ManSrv}  = dirmon_watcher:start_link(ManDir),
-    dirmon_pie:add_watcher(SrcPie, SrcSrv),
-    dirmon_pie:add_watcher(CmpPie, EbinSrv),
-    dirmon_pie:add_watcher(AppPie, EbinSrv),
-    dirmon_pie:add_watcher(ManPie, ManSrv),
+    {ok, _SrcWatcher} =
+        inferno_pie_sup:add_watcher(Sup,
+            SrcDir, [src]),
+    {ok, _EbinWatcher} =
+        inferno_pie_sup:add_watcher(Sup,
+            EbinDir, [cmp, app]),
+    {ok, _ManWatcher} =
+        inferno_pie_sup:add_watcher(Sup,
+            ManDir, [man]),
     {ok, State};
 
 handle_event(_, State) ->
