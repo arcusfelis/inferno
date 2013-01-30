@@ -18,6 +18,7 @@
          module_names_to_compiled_filenames/2,
          application_names_to_directories/2,
          application_directories/1,
+         add_xref_handler/2,
          save/1]).
 
 
@@ -103,6 +104,10 @@
 -record(remove_application, {
         name,
         directory
+}).
+
+-record(add_xref_handler, {
+        xref %% process
 }).
 
 %% ------------------------------------------------------------------
@@ -222,8 +227,13 @@ remove_application(Server, AppName, AppDir) ->
     call(Server, #remove_application{name = AppName, directory = AppDir}).
 
 
+%% @doc Flush data from DETS (used for caching) on disc.
 save(Server) ->
     gen_server:cast(Server, save).
+
+
+add_xref_handler(Server, Xref) ->
+    call(Server, #add_xref_handler{xref = Xref}).
  
 %% ------------------------------------------------------------------
 %% gen_server Client Helpers
@@ -379,7 +389,23 @@ handle_call(#remove_application{name = AppName, directory = AppDir},
             end,
             {reply, {ok, ok}, State}
         end
-    end.
+    end;
+handle_call(#add_xref_handler{xref = Xref},
+            _From, State=#state{dispatcher = Dispatcher, app_tbl = AppTbl}) ->
+    Iter = fun(#info_application{name=Name, directories=[Dir|_]}, Acc) ->
+            [{Name, Dir}|Acc]
+           end,
+    App2Dir = ets:foldl(Iter, [], AppTbl),
+    %% Put all messages into the mail box.
+    %% It is protection against a race condition with a user, that
+    %% requests data when they are not ready yet.
+    [spawn_link(fun() ->
+        xref:add_application(Xref, Dir, [{name, AppName}])
+        end)
+     || {AppName, Dir} <- App2Dir],
+    ok = gen_event:add_handler(Dispatcher, inferno_xref_handler, Xref),
+    {reply, {ok, ok}, State}.
+
 
 
 %% @private
