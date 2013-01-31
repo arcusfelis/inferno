@@ -454,6 +454,7 @@ check_module(ModuleName, State) ->
             M@ = inferno_refman_slow_reader:fill(M@, Cache),
             M@ = inferno_attr_reader:fill(M@, Cache),
             M@ = inferno_behaviour:fill(M@, Cache),
+            M@ = inferno_test_callbacks:fill(M@, Cache),
             #info_module{functions = Funs} =
             M@ = inferno_pos_reader:fill(M@, Cache),
             M@ = M@#info_module{functions = [], is_analysed=true},
